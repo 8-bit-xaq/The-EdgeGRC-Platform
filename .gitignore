@@ -1,0 +1,27 @@
+# ========================
+# GRC Frontend (Next.js)
+# ========================
+grc-frontend/node_modules/
+grc-frontend/.next/
+grc-frontend/out/
+grc-frontend/build/
+grc-frontend/.env.local
+grc-frontend/.env.*.local
+
+# ========================
+# GRC Backend (Django)
+# ========================
+grc-backend/venv/
+grc-backend/env/
+grc-backend/__pycache__/
+grc-backend/*.py[cod]
+grc-backend/db.sqlite3
+grc-backend/media/
+grc-backend/updates/
+
+# ========================
+# OS & Logs
+# ========================
+.DS_Store
+Thumbs.db
+*.log
