@@ -296,7 +296,7 @@ export function RiskRegister() {
             <div className="grid grid-cols-2 gap-4 bg-muted/40 p-4 rounded-lg border border-border">
               <div className="grid gap-2">
                 <Label>Inherent Likelihood</Label>
-                <Select value={likelihood} onValueChange={setLikelihood}>
+                <Select value={likelihood} onValueChange={(v) => setLikelihood(v as string)}>
                   <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="1">1 - Rare</SelectItem>
@@ -309,7 +309,7 @@ export function RiskRegister() {
               </div>
               <div className="grid gap-2">
                 <Label>Inherent Impact</Label>
-                <Select value={impact} onValueChange={setImpact}>
+                <Select value={impact} onValueChange={(v) => setImpact(v as string)}>
                   <SelectTrigger className="bg-background"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="1">1 - Negligible</SelectItem>

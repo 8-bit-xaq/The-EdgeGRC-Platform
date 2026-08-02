@@ -18,7 +18,7 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
 
   // 3. Attach the token if it exists
   if (token) {
-    headers["Authorization"] = `Token ${token}`
+    (headers as Record<string, string>)["Authorization"] = `Token ${token}`
   }
 
   // 4. Construct the full URL (ensuring no double slashes)

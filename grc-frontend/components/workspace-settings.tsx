@@ -481,7 +481,7 @@ export function WorkspaceSettings() {
             <CardContent>
               <div className="grid gap-2 sm:max-w-xs">
                 <Label htmlFor="session-timeout">Session timeout</Label>
-                <Select value={sessionTimeout} onValueChange={setSessionTimeout}>
+                <Select value={sessionTimeout} onValueChange={(v) => setSessionTimeout(v as string)}>
                   <SelectTrigger id="session-timeout" className="w-full">
                     <SelectValue placeholder="Select a timeout" />
                   </SelectTrigger>
