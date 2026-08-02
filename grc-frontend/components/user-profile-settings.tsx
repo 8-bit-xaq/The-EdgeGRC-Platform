@@ -47,7 +47,7 @@ export function UserProfileSettings() {
     const username = localStorage.getItem("grc_username") || sessionStorage.getItem("grc_username")
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
 
-    fetch("http://localhost:8000/api/users/", {
+    fetch("/api/users/", {
       headers: { "Authorization": `Token ${token}` }
     })
       .then(res => res.json())
@@ -107,7 +107,7 @@ export function UserProfileSettings() {
     formData.append("avatar", file) 
 
     try {
-      const response = await fetch(`http://localhost:8000/api/users/${userId}/`, {
+      const response = await fetch(`/api/users/${userId}/`, {
         method: "PATCH",
         headers: {
           "Authorization": `Token ${token}`
@@ -163,7 +163,7 @@ export function UserProfileSettings() {
     try {
       const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
       
-      const response = await fetch(`http://localhost:8000/api/users/${userId}/`, {
+      const response = await fetch(`/api/users/${userId}/`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -199,7 +199,7 @@ export function UserProfileSettings() {
 
     try {
       // 2. Transmit PATCH directly to the DB
-      const res = await fetch(`http://localhost:8000/api/users/${userId}/`, {
+      const res = await fetch(`/api/users/${userId}/`, {
         method: "PATCH",
         headers: { 
           "Authorization": `Token ${token}`,

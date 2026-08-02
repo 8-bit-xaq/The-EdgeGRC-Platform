@@ -151,7 +151,7 @@ export function ThirdPartyAuditExporter() {
         password: (isEncrypted && format === "pdf") ? filePassword.trim() : null
       }
       
-      const res = await fetch("http://localhost:8000/api/export/", {
+      const res = await fetch("/api/export/", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

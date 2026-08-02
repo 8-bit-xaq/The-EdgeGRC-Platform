@@ -34,7 +34,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
     if (!token) return
     try {
-      const res = await fetch("http://localhost:8000/api/notifications/", {
+      const res = await fetch("/api/notifications/", {
         headers: { Authorization: `Token ${token}` }
       })
       if (res.ok) {
@@ -55,7 +55,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const markAsRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`http://localhost:8000/api/notifications/${id}/`, {
+    await fetch(`/api/notifications/${id}/`, {
       method: "PATCH",
       headers: { Authorization: `Token ${token}` }
     })
@@ -64,7 +64,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const markAllAsRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`http://localhost:8000/api/notifications/read/`, {
+    await fetch(`/api/notifications/read/`, {
       method: "PATCH",
       headers: { Authorization: `Token ${token}` }
     })
@@ -73,7 +73,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const removeNotification = async (id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id))
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`http://localhost:8000/api/notifications/${id}/`, {
+    await fetch(`/api/notifications/${id}/`, {
       method: "DELETE",
       headers: { Authorization: `Token ${token}` }
     })
@@ -82,7 +82,7 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const clearAll = async () => {
     setNotifications([])
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`http://localhost:8000/api/notifications/read/`, {
+    await fetch(`/api/notifications/read/`, {
       method: "DELETE",
       headers: { Authorization: `Token ${token}` }
     })
