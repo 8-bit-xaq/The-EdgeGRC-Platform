@@ -50,7 +50,7 @@ function normalizeControl(item: any, index: number) {
   if (Array.isArray(item.tags)) {
     parsedTags = item.tags;
   } else if (typeof item.tags === "string") {
-    parsedTags = item.tags.split(",").map(t => t.trim());
+    parsedTags = item.tags.split(",").map((t: string) => t.trim());
   }
   return {
     control_id: String(rawId),
