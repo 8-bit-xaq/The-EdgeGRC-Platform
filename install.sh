@@ -3,6 +3,7 @@
 # Must be run with sudo
 
 set -e
+REPO_DIR=$(pwd)
 
 echo "========================================"
 echo " Starting GRC Appliance Installation... "
@@ -44,8 +45,8 @@ chown -R www-data:www-data db.sqlite3 media/ # Ensure web server can write to DB
 
 # 4. Install Systemd Services
 echo "[4/5] Installing background services..."
-cp ../../configs/grc-backend.service /etc/systemd/system/
-cp ../../configs/grc-frontend.service /etc/systemd/system/
+cp $REPO_DIR/configs/grc-backend.service /etc/systemd/system/
+cp $REPO_DIR/configs/grc-frontend.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now grc-backend
 systemctl enable --now grc-frontend
@@ -53,7 +54,7 @@ systemctl enable --now grc-frontend
 # 5. Configure Nginx Reverse Proxy
 echo "[5/5] Configuring Nginx web server..."
 rm -f /etc/nginx/sites-enabled/default
-cp ../../configs/nginx.conf /etc/nginx/sites-available/grc-appliance
+cp $REPO_DIR/configs/nginx.conf /etc/nginx/sites-available/grc-appliance
 ln -s /etc/nginx/sites-available/grc-appliance /etc/nginx/sites-enabled/
 systemctl restart nginx
 

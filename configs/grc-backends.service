@@ -7,7 +7,6 @@ User=www-data
 Group=www-data
 WorkingDirectory=/opt/grc-appliance/grc-backend
 Environment="PATH=/opt/grc-appliance/grc-backend/venv/bin"
-# Run Gunicorn with 3 workers, automatically reloading if wsgi.py is touched (OTA updates)
 ExecStart=/opt/grc-appliance/grc-backend/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:8000 grc_api.wsgi:application --reload
 
 [Install]
