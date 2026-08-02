@@ -32,7 +32,7 @@ class ProofSerializer(serializers.ModelSerializer):
             request = self.context.get('request')
             if request:
                 return request.build_absolute_uri(obj.file.url)
-            return f"http://localhost:8000{obj.file.url}"
+            return obj.file.url
         return None
 
 # 1. RemediationTaskSerializer MUST be above ControlSerializer

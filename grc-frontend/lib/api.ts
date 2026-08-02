@@ -1,4 +1,4 @@
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api"
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 /**
  * A centralized fetch wrapper that automatically attaches the base URL

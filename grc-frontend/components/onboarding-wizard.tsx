@@ -37,7 +37,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
 
     if (username && token) {
-      fetch("http://localhost:8000/api/users/", {
+      fetch("/api/users/", {
         headers: { "Authorization": `Token ${token}` }
       })
         .then(res => res.json())
@@ -108,7 +108,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
       
       try {
-        const response = await fetch(`http://localhost:8000/api/users/${userId}/`, {
+        const response = await fetch(`/api/users/${userId}/`, {
           method: "PATCH",
           headers: {
             "Content-Type": "application/json",

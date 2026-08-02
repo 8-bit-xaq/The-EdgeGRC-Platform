@@ -193,7 +193,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
               formData.append('file', proof.file);
               // Fallback to standard fetch with manual token just for FormData to prevent Content-Type conflicts
               const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token");
-              const uploadRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api"}/controls/${updated.id}/proofs/`, {
+              const uploadRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/controls/${updated.id}/proofs/`, {
                 method: "POST",
                 headers: { "Authorization": `Token ${token}` },
                 body: formData, 

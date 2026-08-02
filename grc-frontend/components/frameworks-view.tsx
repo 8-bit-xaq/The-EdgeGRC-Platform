@@ -25,7 +25,7 @@ export function FrameworksView({ targetControlId, onClearTarget, targetFilter, o
     setRole(savedRole);
 
     // 2. Fetch controls to decide if we should show the importer
-    fetch("http://localhost:8000/api/controls/", {
+    fetch("/api/controls/", {
       headers: {
         "Authorization": `Token ${token}`,
         "Content-Type": "application/json"
