@@ -1,0 +1,16 @@
+[Unit]
+Description=GRC Frontend Next.js Node Server
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/grc-appliance/grc-frontend
+Environment="NODE_ENV=production"
+Environment="PORT=3000"
+# Next.js standalone mode generates a server.js file
+ExecStart=/usr/bin/node server.js
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
