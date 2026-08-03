@@ -224,6 +224,15 @@ class ExportAuditPackageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        # --- NEW RBAC SECURITY CHECK ---
+        user_role = getattr(request.user.profile, 'role', '')
+        if user_role not in ['Admin', 'Auditor', 'Executive']:
+            return Response(
+                {"error": "You do not have permission to export audit packages."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        # -------------------------------
+
         scope = request.data.get('scope', {})
         redact = request.data.get('redact', True)
         export_format = request.data.get('format', 'json')

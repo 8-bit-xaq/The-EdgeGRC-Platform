@@ -65,13 +65,42 @@ export function GrcApp({ onLogout }: GrcAppProps) {
     const savedRole = localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role") || "Contributor"
     setRole(savedRole)
 
-    // Check if the wizard needs to be run
-    const hasCompletedOnboarding = localStorage.getItem("grc_onboarding_complete")
-    if (!hasCompletedOnboarding && savedRole === "Admin") {
-      setShowOnboarding(true)
+    async function verifySetupState() {
+      const hasCompletedOnboarding = localStorage.getItem("grc_onboarding_complete")
+      
+      // 1. Fast local bypass
+      if (hasCompletedOnboarding) {
+        setIsInitializing(false)
+        return
+      }
+
+      // 2. Fallback backend check for other browsers
+      if (savedRole === "Admin") {
+        try {
+          const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
+          const res = await fetch("/api/controls/", {
+            headers: { "Authorization": `Token ${token}` }
+          })
+          
+          if (res.ok) {
+            const data = await res.json()
+            // If the database has controls, the framework was already seeded elsewhere
+            if (Array.isArray(data) && data.length > 0) {
+              localStorage.setItem("grc_onboarding_complete", "true")
+              setIsInitializing(false)
+              return
+            }
+          }
+        } catch (err) {
+          console.error("Error verifying setup state:", err)
+        }
+        setShowOnboarding(true)
+      }
+      
+      setIsInitializing(false)
     }
-    
-    setIsInitializing(false)
+
+    verifySetupState()
   }, [])
 
   function navigate(next: NavView) {

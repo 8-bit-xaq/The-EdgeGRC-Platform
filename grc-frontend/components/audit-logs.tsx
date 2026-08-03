@@ -36,7 +36,7 @@ import {
 import { ThirdPartyAuditExporter } from "@/components/third-party-audit-exporter"
 import { initials } from "@/lib/users"
 import { cn } from "@/lib/utils"
-import { fetchApi } from "@/lib/api" // <-- NEW: API Wrapper
+import { fetchApi } from "@/lib/api" 
 
 function SeverityBadge({ severity }: { severity: AuditSeverity }) {
   const styles: Record<AuditSeverity, string> = {
@@ -67,8 +67,11 @@ export function AuditLogs() {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [logs, setLogs] = useState<AuditLogEntry[]>([])
   const [isLoading, setIsLoading] = useState(true)
+  const [role, setRole] = useState<string | null>(null)
 
   useEffect(() => {
+    setRole(localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role"))
+
     fetchApi("auditlogs/")
       .then((res) => {
         if (!res.ok) throw new Error("Network response was not ok")
@@ -204,9 +207,11 @@ export function AuditLogs() {
             </Button>
           )}
 
-          <div className="ml-auto">
-            <ThirdPartyAuditExporter />
-          </div>
+          {['Admin', 'Auditor', 'Executive'].includes(role || '') && (
+            <div className="ml-auto">
+              <ThirdPartyAuditExporter />
+            </div>
+          )}
         </div>
       </div>
 

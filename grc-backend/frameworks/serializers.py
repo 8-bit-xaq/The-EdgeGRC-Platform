@@ -35,13 +35,9 @@ class ProofSerializer(serializers.ModelSerializer):
             return obj.file.url
         return None
 
-# 1. RemediationTaskSerializer MUST be above ControlSerializer
 class RemediationTaskSerializer(serializers.ModelSerializer):
     assigned_to_username = serializers.ReadOnlyField(source='assigned_to.username')
-    
-    # --- NEW: Expose the requester's username ---
     requested_by_username = serializers.ReadOnlyField(source='requested_by.username')
-    
     control = serializers.SlugRelatedField(slug_field='control_id', queryset=Control.objects.all())
 
     class Meta:
@@ -52,7 +48,7 @@ class RemediationTaskSerializer(serializers.ModelSerializer):
             'requested_by', 'requested_by_username',
             'due_date', 'status', 'created_at', 'updated_at'
         ]
-# --- NEW: Assessment Serializers ---
+
 class TestPlanSerializer(serializers.ModelSerializer):
     class Meta:
         model = TestPlan
@@ -69,14 +65,9 @@ class AssessmentActivitySerializer(serializers.ModelSerializer):
             'auditor_notes', 'date_started', 'date_completed'
         ]
 
-# 2. ControlSerializer
 class ControlSerializer(serializers.ModelSerializer):
-    # CHANGED: Use a custom method to fetch shared proofs
     proofs = serializers.SerializerMethodField()
-    
     remediation_tasks = serializers.SerializerMethodField()
-    
-    # NEW: Nested formal assessment data
     test_plan = TestPlanSerializer(read_only=True)
     assessments = AssessmentActivitySerializer(many=True, read_only=True)
     
@@ -117,7 +108,6 @@ class ControlSerializer(serializers.ModelSerializer):
             'next_audit_date'
         ]
 
-    # Fetch proofs for this control AND its cross-walked siblings
     def get_proofs(self, obj):
         proofs = {p.id: p for p in obj.proofs.all()}
         
@@ -142,24 +132,19 @@ class ControlSerializer(serializers.ModelSerializer):
         
         new_status = validated_data.get('status', instance.status)
         
-        # Block Contributors from setting status to Passing
         if user_role == 'Contributor' and new_status == 'Passing':
             raise serializers.ValidationError({"status": "Contributors cannot mark controls as Passing."})
 
-        # Block Reviewers/Auditors from setting status to Not Applicable
         if new_status == 'Not Applicable' and user_role not in ['Admin', 'Contributor']:
             raise serializers.ValidationError({"status": "Only Admins and Contributors can mark controls as Not Applicable."})
             
-        # Block Reviewers from modifying the text evidence
-        if user_role == 'Reviewer':
+        if user_role in ['Reviewer', 'Auditor']:
             if 'evidence' in validated_data and validated_data['evidence'] != instance.evidence:
-                raise serializers.ValidationError({"evidence": "Reviewers cannot modify text evidence."})
-            # Silently discard any description changes they might try to send
+                raise serializers.ValidationError({"evidence": "Reviewers and Auditors cannot modify text evidence."})
             validated_data.pop('description', None)
             
         return super().update(instance, validated_data)
 
-# 3. RiskSerializer MUST be below ControlSerializer
 class RiskSerializer(serializers.ModelSerializer):
     inherent_score = serializers.ReadOnlyField()
     residual_score = serializers.ReadOnlyField()
@@ -223,7 +208,6 @@ class UserSerializer(serializers.ModelSerializer):
     
     notify_assessments = serializers.BooleanField(source='profile.notify_assessments', required=False)
     notify_tasks = serializers.BooleanField(source='profile.notify_tasks', required=False)
-    # --- FIX 1: Add the explicit profile mapping here ---
     notify_schedules = serializers.BooleanField(source='profile.notify_schedules', required=False)
 
     class Meta:
@@ -247,10 +231,8 @@ class UserSerializer(serializers.ModelSerializer):
             user.is_active = validated_data['is_active']
         
         user.profile.role = profile_data.get('role', 'Contributor')
-        # Apply defaults on creation
         user.profile.notify_assessments = profile_data.get('notify_assessments', True)
         user.profile.notify_tasks = profile_data.get('notify_tasks', True)
-        # FIX 2: Apply default for schedules
         user.profile.notify_schedules = profile_data.get('notify_schedules', False)
         
         user.profile.save()
@@ -273,11 +255,9 @@ class UserSerializer(serializers.ModelSerializer):
                 instance.profile.notify_assessments = profile_data['notify_assessments']
             if 'notify_tasks' in profile_data:
                 instance.profile.notify_tasks = profile_data['notify_tasks']
-            # --- FIX 3: Intercept and save the PATCH request here ---
             if 'notify_schedules' in profile_data:
                 instance.profile.notify_schedules = profile_data['notify_schedules']
             
-        # Manually extract the file directly from the request bypassing JSON validation
         request = self.context.get('request')
         if request and request.FILES.get('avatar'):
             instance.profile.avatar = request.FILES['avatar']
