@@ -436,7 +436,7 @@ export function WorkspaceSettings() {
                   Platform OTA Updates
                 </CardTitle>
                 <CardDescription className="text-xs">
-                  Upload an official ByteTex release package to upgrade the appliance to the latest version.
+                  Upload an official Edge-GRC release package to upgrade the appliance to the latest version.
                 </CardDescription>
               </CardHeader>
               <CardContent>
