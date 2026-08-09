@@ -554,3 +554,42 @@ class SystemUpdateView(APIView):
             
         except Exception as e:
             return Response({"error": f"Failed to stage update: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class FactoryResetView(APIView):
+    """
+    Verifies the admin password and completely wipes the GRC workspace 
+    data (Controls, Risks, Tasks, Evidence) while preserving User accounts.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # 1. Ensure the user is an Admin
+        if getattr(request.user.profile, 'role', '') != 'Admin':
+            return Response({"error": "Only Admins can perform a factory reset."}, status=status.HTTP_403_FORBIDDEN)
+
+        # 2. Verify the password
+        password = request.data.get('password')
+        if not password:
+            return Response({"error": "Password is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not request.user.check_password(password):
+            return Response({"error": "Incorrect password."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            # 3. Purge the Database
+            # Deleting controls automatically cascades and deletes all related Proofs, 
+            # RemediationTasks, TestPlans, and AssessmentActivities due to SQL foreign keys.
+            Control.objects.all().delete()
+            Risk.objects.all().delete()
+            Notification.objects.all().delete()
+
+            # 4. Wipe physical evidence files from the server
+            evidence_dir = os.path.join(settings.MEDIA_ROOT, 'evidence_proofs')
+            if os.path.exists(evidence_dir):
+                shutil.rmtree(evidence_dir)
+                os.makedirs(evidence_dir)
+
+            return Response({"message": "Workspace successfully purged."})
+        except Exception as e:
+            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
