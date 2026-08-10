@@ -547,7 +547,7 @@ class SystemUpdateView(APIView):
                 for chunk in file_obj.chunks():
                     dest.write(chunk)
             
-            threading.Thread(target=execute_system_update, args=(zip_path, settings.BASE_DIR)).start()
+            threading.Thread(target=execute_system_update, args=(zip_path, '/opt/grc-appliance/')).start()
             
             return Response({"status": "Update initiated. The system will apply changes and restart automatically."}, status=status.HTTP_200_OK)
             
