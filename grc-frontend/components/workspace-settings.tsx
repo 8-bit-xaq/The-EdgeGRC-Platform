@@ -38,7 +38,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useOrganization } from "@/lib/organization"
-import { fetchApi } from "@/lib/api" // <-- NEW: Imported the API wrapper
+import { fetchApi } from "@/lib/api"
 
 interface SessionRow {
   id: string
@@ -56,7 +56,10 @@ export function WorkspaceSettings() {
   const { organization, updateOrganization } = useOrganization()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const backupInputRef = useRef<HTMLInputElement>(null)
-  const updateInputRef = useRef<HTMLInputElement>(null) // <-- NEW: Ref for OTA updates
+  const updateInputRef = useRef<HTMLInputElement>(null)
+
+  // Version state
+  const [appVersion, setAppVersion] = useState("Unknown")
 
   // Role and Tab state
   const [role, setRole] = useState<string | null>(null)
@@ -74,6 +77,14 @@ export function WorkspaceSettings() {
     setLogoDataUrl(organization.logoDataUrl)
   }, [organization])
 
+  // Fetch Version on load
+  useEffect(() => {
+    fetch("/version.json")
+      .then((res) => res.json())
+      .then((data) => setAppVersion(data.version))
+      .catch(() => setAppVersion("1.0.0"))
+  }, [])
+
   // Security & Backup draft state
   const [sessionTimeout, setSessionTimeout] = useState("30 minutes")
   const [sessions, setSessions] = useState<SessionRow[]>([])
@@ -85,7 +96,7 @@ export function WorkspaceSettings() {
   const [isRestoring, setIsRestoring] = useState(false)
   const [restoreFile, setRestoreFile] = useState<File | null>(null)
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
-  const [isUpdating, setIsUpdating] = useState(false) // <-- NEW: State for OTA update
+  const [isUpdating, setIsUpdating] = useState(false)
 
   useEffect(() => {
     const savedRole = localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role")
@@ -94,7 +105,6 @@ export function WorkspaceSettings() {
       setActiveTab("organization")
       setIsLoadingSessions(true)
       
-      // Cleaned up with fetchApi
       fetchApi("sessions/")
         .then(res => res.json())
         .then(data => {
@@ -177,7 +187,6 @@ export function WorkspaceSettings() {
     })
   }
 
-  // --- NEW: Refactored with fetchApi ---
   async function handleBackup() {
     setIsBackingUp(true)
     try {
@@ -211,10 +220,9 @@ export function WorkspaceSettings() {
     }
     setRestoreFile(file)
     setShowRestoreConfirm(true)
-    if (backupInputRef.current) backupInputRef.current.value = "" // Reset input
+    if (backupInputRef.current) backupInputRef.current.value = ""
   }
 
-  // --- NEW: Refactored with fetchApi ---
   async function executeRestore() {
     if (!restoreFile) return
 
@@ -232,7 +240,6 @@ export function WorkspaceSettings() {
 
       toast.success("System Restored", { description: "Re-authenticating to load the restored state..." })
       
-      // Clear sessions and force reload so the client grabs fresh data from the newly restored DB
       setTimeout(() => {
         localStorage.removeItem('grc_token')
         sessionStorage.removeItem('grc_token')
@@ -247,7 +254,6 @@ export function WorkspaceSettings() {
     }
   }
 
-  // --- NEW: OTA System Updater Function ---
   async function handleUpdateFileSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -267,15 +273,20 @@ export function WorkspaceSettings() {
     formData.append("file", file)
 
     try {
-      const res = await fetchApi("update/", {
+      // Bypass fetchApi to prevent application/json headers from breaking the multipart upload
+      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
+      const res = await fetch("/api/update/", {
         method: "POST",
+        headers: {
+          "Authorization": `Token ${token}`
+          // CRITICAL: Do NOT set Content-Type here. The browser must set it automatically.
+        },
         body: formData,
       })
 
       if (res.ok) {
-        toast.success("Update initialized", { description: "The system is applying the update and will restart shortly. You may lose connection momentarily." })
-        // Force a page reload after a delay to grab the new frontend assets
-        setTimeout(() => window.location.reload(), 15000) 
+        toast.success("Update initialized", { description: "The system is applying the update and will restart shortly." })
+        setTimeout(() => window.location.reload(), 15000)
       } else {
         const err = await res.json()
         toast.error("Update failed", { description: err.error || "Could not process the update package." })
@@ -286,7 +297,7 @@ export function WorkspaceSettings() {
       setIsUpdating(false)
       if (updateInputRef.current) updateInputRef.current.value = ""
     }
-  }
+  } // <-- Function is perfectly closed here!
 
   return (
     <div className="grid gap-6">
@@ -388,7 +399,6 @@ export function WorkspaceSettings() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="grid gap-4">
-                {/* Backup Block */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-border bg-muted/40 p-4">
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-foreground">System Backup</p>
@@ -403,7 +413,6 @@ export function WorkspaceSettings() {
                   </Button>
                 </div>
                 
-                {/* Restore Block */}
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-destructive/20 bg-destructive/5 p-4">
                   <div className="space-y-1 pr-4">
                     <p className="text-sm font-medium text-foreground">Import Snapshot</p>
@@ -428,12 +437,14 @@ export function WorkspaceSettings() {
               </CardContent>
             </Card>
 
-            {/* --- NEW: OTA System Updater Card --- */}
             <Card className="border-purple-500/20 shadow-sm">
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
                   <UploadCloud className="size-4 text-purple-500" />
                   Platform OTA Updates
+                  <Badge variant="outline" className="ml-2 bg-muted text-muted-foreground">
+                    v{appVersion}
+                  </Badge>
                 </CardTitle>
                 <CardDescription className="text-xs">
                   Upload an official Edge-GRC release package to upgrade the appliance to the latest version.
@@ -467,11 +478,9 @@ export function WorkspaceSettings() {
                 </div>
               </CardContent>
             </Card>
-
           </TabsContent>
         )}
 
-        {/* Security & Access */}
         <TabsContent value="security" className="grid gap-6">
           <Card>
             <CardHeader>
@@ -565,7 +574,6 @@ export function WorkspaceSettings() {
         </TabsContent>
       </Tabs>
 
-      {/* Destructive actions */}
       {isAdmin && (
         <Card className="border-destructive/40">
           <CardHeader>
@@ -594,7 +602,6 @@ export function WorkspaceSettings() {
         </Card>
       )}
 
-      {/* Restore Confirmation Dialog */}
       <Dialog open={showRestoreConfirm} onOpenChange={setShowRestoreConfirm}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -622,7 +629,6 @@ export function WorkspaceSettings() {
         </DialogContent>
       </Dialog>
 
-      {/* Sticky save bar */}
       <div className="sticky bottom-0 -mx-4 mt-2 flex items-center justify-between gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-6 sm:px-6">
         <p className="hidden text-sm text-muted-foreground sm:block">
           Changes apply across your entire GRC workspace.
