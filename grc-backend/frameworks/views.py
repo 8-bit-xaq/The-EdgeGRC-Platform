@@ -500,22 +500,21 @@ class NotificationUpdateView(APIView):
 
 
 def execute_system_update(zip_path, base_dir):
-    """Runs in the background to apply the update and restart the server."""
+    """Runs in the background to apply the update and restart services (Dev Mode)."""
     try:
+        # 1. Extract the new code over the live directory
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(base_dir)
-        
-        req_path = os.path.join(base_dir, 'requirements.txt')
-        if os.path.exists(req_path):
-            subprocess.run([sys.executable, '-m', 'pip', 'install', '-r', req_path], check=True)
-        
-        manage_path = os.path.join(base_dir, 'manage.py')
-        subprocess.run([sys.executable, manage_path, 'migrate'], check=True)
-        
-        wsgi_path = os.path.join(base_dir, 'grc_api', 'wsgi.py')
-        if os.path.exists(wsgi_path):
-            os.utime(wsgi_path, None)
             
+        # 2. Apply Python Database Migrations (if any)
+        backend_dir = os.path.join(base_dir, 'grc-backend')
+        manage_path = os.path.join(backend_dir, 'manage.py')
+        if os.path.exists(manage_path):
+            subprocess.run([sys.executable, manage_path, 'migrate'], cwd=backend_dir, check=True)
+            
+        # 3. Restart the systemd services to load the new code
+        subprocess.run(['sudo', 'systemctl', 'restart', 'grc-backends', 'grc-frontend'], check=True)
+        
     except Exception as e:
         print(f"CRITICAL: System update failed: {e}")
     finally:
