@@ -77,9 +77,9 @@ export function WorkspaceSettings() {
     setLogoDataUrl(organization.logoDataUrl)
   }, [organization])
 
-  // Fetch Version on load
+  // Fetch Version on load with dynamic cache-busting timestamp
   useEffect(() => {
-    fetch("/version.json")
+    fetch(`/version.json?t=${new Date().getTime()}`)
       .then((res) => res.json())
       .then((data) => setAppVersion(data.version))
       .catch(() => setAppVersion("1.0.0"))
@@ -297,7 +297,7 @@ export function WorkspaceSettings() {
       setIsUpdating(false)
       if (updateInputRef.current) updateInputRef.current.value = ""
     }
-  } // <-- Function is perfectly closed here!
+  } 
 
   return (
     <div className="grid gap-6">
