@@ -441,7 +441,7 @@ export function WorkspaceSettings() {
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
                   <UploadCloud className="size-4 text-purple-500" />
-                  Platform Updates
+                  Edge-GRC Platform Updates
                   <Badge variant="outline" className="ml-2 bg-muted text-muted-foreground">
                     v{appVersion}
                   </Badge>
