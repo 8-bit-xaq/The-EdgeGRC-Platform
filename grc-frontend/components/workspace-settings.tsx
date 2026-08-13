@@ -161,9 +161,23 @@ export function WorkspaceSettings() {
     reader.readAsDataURL(file)
   }
 
-  function revokeSession(id: string) {
-    setSessions((prev) => prev.filter((s) => s.id !== id))
-    toast.success("Session revoked", { description: "That device has been signed out." })
+  async function revokeSession(id: string) {
+    try {
+      const res = await fetchApi("sessions/", {
+        method: "DELETE",
+        body: JSON.stringify({ id }),
+      })
+      
+      if (res.ok) {
+        // Visual deletion
+        setSessions((prev) => prev.filter((s) => s.id !== id))
+        toast.success("Session revoked", { description: "That device has been securely signed out." })
+      } else {
+        toast.error("Failed to revoke session.", { description: "You may not have permission." })
+      }
+    } catch (err) {
+      toast.error("Network error while revoking session.")
+    }
   }
 
   function handleSave() {

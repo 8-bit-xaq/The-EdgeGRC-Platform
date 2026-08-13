@@ -1,7 +1,7 @@
 from rest_framework import generics, views, status
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from .models import Control, Proof, Risk, RemediationTask, TestPlan, AssessmentActivity, Notification
+from .models import Control, Proof, Risk, RemediationTask, TestPlan, AssessmentActivity, Notification, ActiveSession
 from django.contrib.auth.models import User
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authtoken.views import ObtainAuthToken
@@ -12,13 +12,10 @@ from .serializers import (
 )
 from django.db import connection
 from auditlog.models import LogEntry
-from django.contrib.sessions.models import Session
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.views import APIView
 from django.http import HttpResponse
-from .models import ActiveSession
-from .serializers import ActiveSessionSerializer
 
 import io
 import os
@@ -42,47 +39,6 @@ from .permissions import (
     EvidenceUploadPermissions
 )
 
-class CustomLoginView(ObtainAuthToken):
-    def post(self, request, *args, **kwargs):
-        # 1. Validate the username and password
-        serializer = self.serializer_class(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data['user']
-        
-        # 2. Get or generate the auth token for this user
-        token, created = Token.objects.get_or_create(user=user)
-        
-        # 3. Extract the device metadata
-        user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown Browser')[:50]
-        ip_address = request.META.get('REMOTE_ADDR', '0.0.0.0')
-        
-        # 4. Save the active session to our new database table
-        ActiveSession.objects.update_or_create(
-            token_key=token.key,
-            defaults={
-                'user': user,
-                'device_info': user_agent,
-                'ip_address': ip_address,
-                'location': "Appliance Network"
-            }
-        )
-        
-        # 5. Return the token to Next.js so it can log in!
-        return Response({
-            'token': token.key
-        })
-
-class SessionListView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        # Fetch all active sessions belonging to the logged-in user
-        sessions = ActiveSession.objects.filter(user=request.user).order_by('-last_active')
-        
-        # Pass the request context so the serializer can determine which session is "Current"
-        serializer = ActiveSessionSerializer(sessions, many=True, context={'request': request})
-        
-        return Response(serializer.data)
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
     queryset = TestPlan.objects.all()
@@ -225,7 +181,27 @@ class CustomAuthToken(ObtainAuthToken):
         serializer = self.serializer_class(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
-        token, created = Token.objects.get_or_create(user=user)
+        
+        # Force a fresh token on every new login to allow multi-device tracking
+        Token.objects.filter(user=user).delete()
+        token = Token.objects.create(user=user)
+        
+        # Extract the device metadata safely
+        user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown Browser')[:250]
+        raw_ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', '')).split(',')[0].strip()
+        ip_address = raw_ip if raw_ip else None
+        
+        # Save the active session to our database table
+        ActiveSession.objects.update_or_create(
+            token_key=token.key,
+            defaults={
+                'user': user,
+                'device_info': user_agent,
+                'ip_address': ip_address,
+                'location': "Appliance Network",
+                'last_active': timezone.now()
+            }
+        )
         
         role = 'Contributor'
         avatar_url = None
@@ -246,22 +222,53 @@ class ActiveSessionsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        sessions = Session.objects.filter(expire_date__gte=timezone.now())
-        data = []
-        for s in sessions:
-            data_dict = s.get_decoded()
-            user_id = data_dict.get('_auth_user_id')
-            if user_id and int(user_id) == request.user.id:
-                data.append({
-                    'id': s.session_key,
-                    'device': 'Web Browser', 
-                    'meta': 'Desktop',
-                    'location': 'Unknown',
-                    'lastActive': s.expire_date.strftime('%Y-%m-%d %H:%M'),
-                    'current': s.session_key == request.session.session_key
-                })
-        return Response(data)
+        # 1. Enforce Admin-only access using your custom profile roles
+        user_role = getattr(request.user.profile, 'role', '') if hasattr(request.user, 'profile') else ''
+        if user_role != 'Admin' and not request.user.is_superuser:
+            return Response(
+                {"error": "Only Administrators can view active sessions."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
 
+        # 2. Query ALL active sessions across the entire platform
+        # Using select_related('user') prevents the N+1 query problem
+        sessions = ActiveSession.objects.select_related('user').all().order_by('-last_active')
+        data = []
+        
+        # Identify the token making this exact request
+        current_token = request.auth.key if hasattr(request, 'auth') and request.auth else None
+
+        for s in sessions:
+            data.append({
+                'id': s.token_key,
+                # Inject the username into the device string so the Admin knows who owns it
+                'device': f"[{s.user.username}] {s.device_info}", 
+                'meta': s.ip_address or "Unknown IP",
+                'location': s.location,
+                'lastActive': s.last_active.strftime('%Y-%m-%d %H:%M'),
+                'current': s.token_key == current_token
+            })
+            
+        return Response(data)
+    def delete(self, request):
+        user_role = getattr(request.user.profile, 'role', '') if hasattr(request.user, 'profile') else ''
+        if user_role != 'Admin' and not request.user.is_superuser:
+            return Response(
+                {"error": "Only Administrators can revoke sessions."}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        token_key = request.data.get('id')
+        if not token_key:
+            return Response({"error": "Session ID is required."}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # 1. Delete the actual DRF authentication token so the device's API requests start failing
+        Token.objects.filter(key=token_key).delete()
+        
+        # 2. Delete our tracking record from the active sessions table
+        ActiveSession.objects.filter(token_key=token_key).delete()
+        
+        return Response({"message": "Session successfully revoked."}, status=status.HTTP_200_OK)
 
 class ExportAuditPackageView(APIView):
     permission_classes = [IsAuthenticated]

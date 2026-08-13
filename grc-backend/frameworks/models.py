@@ -7,7 +7,7 @@ from django.conf import settings
 from django.utils import timezone
 
 class ActiveSession(models.Model):
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='active_sessions')
     token_key = models.CharField(max_length=40, unique=True)
     device_info = models.CharField(max_length=255, default="Unknown Device")
     ip_address = models.GenericIPAddressField(null=True, blank=True)
