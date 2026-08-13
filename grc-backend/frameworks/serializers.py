@@ -1,9 +1,36 @@
 import os
 import json
 from rest_framework import serializers
+from django.utils.timesince import timesince
+from django.utils import timezone
+from .models import ActiveSession
 from django.contrib.auth.models import User
 from auditlog.models import LogEntry
 from .models import Control, Proof, Risk, UserProfile, RemediationTask, TestPlan, AssessmentActivity, Notification
+
+class ActiveSessionSerializer(serializers.ModelSerializer):
+    # Map model fields to React's expected property names
+    id = serializers.CharField(source='token_key')
+    device = serializers.CharField(source='device_info')
+    meta = serializers.CharField(source='ip_address')
+    lastActive = serializers.SerializerMethodField()
+    current = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ActiveSession
+        fields = ['id', 'device', 'meta', 'location', 'lastActive', 'current']
+
+    def get_lastActive(self, obj):
+        # Converts the timestamp into a readable format like "5 minutes ago"
+        time_diff = timesince(obj.last_active, timezone.now())
+        return f"{time_diff.split(',')[0]} ago"
+
+    def get_current(self, obj):
+        # Checks if the token making the request matches this row's token
+        request = self.context.get('request')
+        if request and hasattr(request, 'auth') and request.auth:
+            return obj.token_key == request.auth.key
+        return False
 
 class ProofSerializer(serializers.ModelSerializer):
     name = serializers.SerializerMethodField()

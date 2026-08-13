@@ -17,6 +17,8 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.views import APIView
 from django.http import HttpResponse
+from .models import ActiveSession
+from .serializers import ActiveSessionSerializer
 
 import io
 import os
@@ -40,6 +42,47 @@ from .permissions import (
     EvidenceUploadPermissions
 )
 
+class CustomLoginView(ObtainAuthToken):
+    def post(self, request, *args, **kwargs):
+        # 1. Validate the username and password
+        serializer = self.serializer_class(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        user = serializer.validated_data['user']
+        
+        # 2. Get or generate the auth token for this user
+        token, created = Token.objects.get_or_create(user=user)
+        
+        # 3. Extract the device metadata
+        user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown Browser')[:50]
+        ip_address = request.META.get('REMOTE_ADDR', '0.0.0.0')
+        
+        # 4. Save the active session to our new database table
+        ActiveSession.objects.update_or_create(
+            token_key=token.key,
+            defaults={
+                'user': user,
+                'device_info': user_agent,
+                'ip_address': ip_address,
+                'location': "Appliance Network"
+            }
+        )
+        
+        # 5. Return the token to Next.js so it can log in!
+        return Response({
+            'token': token.key
+        })
+
+class SessionListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Fetch all active sessions belonging to the logged-in user
+        sessions = ActiveSession.objects.filter(user=request.user).order_by('-last_active')
+        
+        # Pass the request context so the serializer can determine which session is "Current"
+        serializer = ActiveSessionSerializer(sessions, many=True, context={'request': request})
+        
+        return Response(serializer.data)
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
     queryset = TestPlan.objects.all()

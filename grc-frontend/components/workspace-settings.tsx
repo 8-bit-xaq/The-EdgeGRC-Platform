@@ -629,11 +629,17 @@ export function WorkspaceSettings() {
         </DialogContent>
       </Dialog>
 
-      <div className="sticky bottom-0 -mx-4 mt-2 flex items-center justify-between gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-background/80 sm:-mx-6 sm:px-6">
-        <p className="hidden text-sm text-muted-foreground sm:block">
+      {/* Floating Save Action Bar */}
+      <div className="sticky bottom-6 z-40 mt-8 flex flex-col items-center justify-between gap-4 rounded-xl border border-border bg-card px-6 py-4 shadow-lg sm:flex-row">
+        <p className="text-sm text-muted-foreground text-center sm:text-left">
           Changes apply across your entire GRC workspace.
         </p>
-        <Button type="button" onClick={handleSave} disabled={saving} className="gap-2">
+        <Button 
+          type="button" 
+          onClick={handleSave} 
+          disabled={saving} 
+          className="w-full gap-2 sm:w-auto"
+        >
           {saving ? (
             <>
               <Loader2 className="size-4 animate-spin" aria-hidden />

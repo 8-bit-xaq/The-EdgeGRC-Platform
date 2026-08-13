@@ -3,6 +3,20 @@ from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 from auditlog.registry import auditlog
+from django.conf import settings
+from django.utils import timezone
+
+class ActiveSession(models.Model):
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
+    token_key = models.CharField(max_length=40, unique=True)
+    device_info = models.CharField(max_length=255, default="Unknown Device")
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    location = models.CharField(max_length=100, default="Local Network")
+    created_at = models.DateTimeField(auto_now_add=True)
+    last_active = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return f"{self.user.username} - {self.device_info}"
 
 class Control(models.Model):
     control_id = models.CharField(max_length=50, unique=True)
