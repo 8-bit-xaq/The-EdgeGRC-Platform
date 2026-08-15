@@ -25,3 +25,8 @@ grc-backend/updates/
 .DS_Store
 Thumbs.db
 *.log
+
+# ========================
+# Dev stuff
+# ========================
+grc-frontend/.gitignore

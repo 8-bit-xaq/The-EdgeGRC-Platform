@@ -15,6 +15,7 @@ import { RiskRegister } from "@/components/risk-register"
 import { OrganizationProvider } from "@/lib/organization"
 import { NotificationsProvider } from "@/lib/notifications"
 import { OnboardingWizard } from "@/components/onboarding-wizard"
+import { fetchApi } from "@/lib/api"
 
 const VIEW_META: Record<NavView, { title: string; subtitle: string }> = {
   dashboard: {
@@ -78,9 +79,7 @@ export function GrcApp({ onLogout }: GrcAppProps) {
       if (savedRole === "Admin") {
         try {
           const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-          const res = await fetch("/api/controls/", {
-            headers: { "Authorization": `Token ${token}` }
-          })
+          const res = await fetchApi("controls/")
           
           if (res.ok) {
             const data = await res.json()

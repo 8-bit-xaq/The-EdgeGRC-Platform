@@ -1,6 +1,7 @@
 "use client"
 
 import React, { createContext, useContext, useEffect, useState } from "react"
+import { fetchApi } from "@/lib/api"
 
 export type NotificationSeverity = "info" | "success" | "warning" | "critical"
 
@@ -31,76 +32,60 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const unreadCount = notifications.filter((n) => !n.read).length
 
   const fetchNotifications = async () => {
+    // Check for token locally to prevent polling 401s when logged out
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
     if (!token) return
-    try {
-      const res = await fetch("/api/notifications/", {
-        headers: { Authorization: `Token ${token}` }
-      })
-      if (res.ok) {
-        const data = await res.json()
-        setNotifications(data.map((n: any) => ({ ...n, id: String(n.id) })))
+
+      try {
+        const res = await fetchApi("notifications/")
+        if (res.ok) {
+          const data = await res.json()
+          setNotifications(data.map((n: any) => ({ ...n, id: String(n.id) })))
+        }
+      } catch (err) {
+        console.error("Failed to fetch notifications", err)
       }
-    } catch (err) {
-      console.error("Failed to fetch notifications", err)
-    }
   }
 
   useEffect(() => {
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 30000) 
+    const interval = setInterval(fetchNotifications, 30000)
     return () => clearInterval(interval)
   }, [])
 
   const markAsRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/${id}/`, {
-      method: "PATCH",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/${id}/`, { method: "PATCH" })
   }
 
   const markAllAsRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/read/`, {
-      method: "PATCH",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/read/`, { method: "PATCH" })
   }
 
   const removeNotification = async (id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id))
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/${id}/`, {
-      method: "DELETE",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/${id}/`, { method: "DELETE" })
   }
 
   const clearAll = async () => {
     setNotifications([])
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/read/`, {
-      method: "DELETE",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/read/`, { method: "DELETE" })
   }
 
   return (
     <NotificationsContext.Provider
-      value={{
-        notifications,
-        unreadCount,
-        markAsRead,
-        markAllAsRead,
-        removeNotification,
-        clearAll,
-        refreshNotifications: fetchNotifications
-      }}
+    value={{
+      notifications,
+      unreadCount,
+      markAsRead,
+      markAllAsRead,
+      removeNotification,
+      clearAll,
+      refreshNotifications: fetchNotifications
+    }}
     >
-      {children}
+    {children}
     </NotificationsContext.Provider>
   )
 }
@@ -117,13 +102,13 @@ export function formatRelativeTime(dateString: string) {
   const date = new Date(dateString)
   const now = new Date()
   const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-  
+
   if (diffInSeconds < 60) return "Just now"
-  const diffInMinutes = Math.floor(diffInSeconds / 60)
-  if (diffInMinutes < 60) return `${diffInMinutes}m ago`
-  const diffInHours = Math.floor(diffInMinutes / 60)
-  if (diffInHours < 24) return `${diffInHours}h ago`
-  const diffInDays = Math.floor(diffInHours / 24)
-  if (diffInDays < 7) return `${diffInDays}d ago`
-  return date.toLocaleDateString()
+    const diffInMinutes = Math.floor(diffInSeconds / 60)
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`
+      const diffInHours = Math.floor(diffInMinutes / 60)
+      if (diffInHours < 24) return `${diffInHours}h ago`
+        const diffInDays = Math.floor(diffInHours / 24)
+        if (diffInDays < 7) return `${diffInDays}d ago`
+          return date.toLocaleDateString()
 }
