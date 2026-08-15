@@ -10,7 +10,7 @@ echo " Starting GRC Appliance Installation... "
 echo "========================================"
 
 # 1. Update system and install base dependencies
-echo "[1/5] Installing system dependencies..."
+echo "[1/6] Installing system dependencies..."
 apt-get update
 apt-get install -y python3-pip python3-venv python3-dev nginx curl unzip openssl
 
@@ -18,8 +18,16 @@ apt-get install -y python3-pip python3-venv python3-dev nginx curl unzip openssl
 curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
 apt-get install -y nodejs
 
-# 2. Set up the installation directory
-echo "[2/5] Staging application files..."
+# 2. Build the Next.js Frontend
+echo "[2/6] Compiling Next.js Frontend..."
+cd $REPO_DIR/grc-frontend
+npm install
+echo "NEXT_PUBLIC_API_URL=/api" > .env.production
+npm run build
+cd $REPO_DIR
+
+# 3. Set up the installation directory
+echo "[3/6] Staging application files..."
 INSTALL_DIR="/opt/grc-appliance"
 mkdir -p $INSTALL_DIR
 
@@ -29,7 +37,7 @@ cp -r grc-frontend/.next/standalone $INSTALL_DIR/grc-frontend
 cp -r grc-frontend/public $INSTALL_DIR/grc-frontend/public
 cp -r grc-frontend/.next/static $INSTALL_DIR/grc-frontend/.next/static
 
-# --- NEW: Initialize SSL Directory and generate a dummy cert ---
+# Initialize SSL Directory and generate a dummy cert
 SSL_DIR="$INSTALL_DIR/grc-backend/configs/ssl"
 mkdir -p $SSL_DIR
 
@@ -39,11 +47,8 @@ openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -out $SSL_DIR/appliance_cert.pem \
   -subj "/C=US/ST=South Dakota/L=Sioux Falls/O=ByteTex/CN=edge-grc.local"
 
-# Fix permissions so Django (www-data) can overwrite these files later
-chown -R www-data:www-data $INSTALL_DIR
-
-# 3. Configure the Python Backend
-echo "[3/5] Configuring Django backend..."
+# 4. Configure the Python Backend
+echo "[4/6] Configuring Django backend..."
 cd $INSTALL_DIR/grc-backend
 python3 -m venv venv
 source venv/bin/activate
@@ -51,14 +56,16 @@ pip install -r requirements.txt
 pip install gunicorn
 python manage.py migrate
 python manage.py collectstatic --noinput
-chown -R www-data:www-data db.sqlite3 media/ # Ensure web server can write to DB and media
 
-# 4. Install Systemd Services
-echo "[4/5] Installing background services..."
+# Fix permissions so Django (www-data) can overwrite files, lock the DB, and read static assets
+chown -R www-data:www-data $INSTALL_DIR
+
+# 5. Install Systemd Services
+echo "[5/6] Installing background services..."
 cp $REPO_DIR/configs/grc-backend.service /etc/systemd/system/
 cp $REPO_DIR/configs/grc-frontend.service /etc/systemd/system/
 
-# --- NEW: Create the Systemd SSL Watcher ---
+# Create the Systemd SSL Watcher
 cat <<EOF > /etc/systemd/system/grc-ssl-watcher.path
 [Unit]
 Description=Watch for GRC SSL Certificate changes
@@ -84,8 +91,8 @@ systemctl enable --now grc-backend
 systemctl enable --now grc-frontend
 systemctl enable --now grc-ssl-watcher.path
 
-# 5. Configure Nginx Reverse Proxy
-echo "[5/5] Configuring Nginx web server..."
+# 6. Configure Nginx Reverse Proxy
+echo "[6/6] Configuring Nginx web server..."
 rm -f /etc/nginx/sites-enabled/default
 cp $REPO_DIR/configs/nginx.conf /etc/nginx/sites-available/grc-appliance
 ln -s /etc/nginx/sites-available/grc-appliance /etc/nginx/sites-enabled/

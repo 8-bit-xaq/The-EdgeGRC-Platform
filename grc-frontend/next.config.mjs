@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  allowedDevOrigins: ['192.168.200.208'],
-  // ... leave any other existing settings here ...
+  output: 'standalone',
+  
+  // ... any other existing settings (like image domains or webpack configs) ...
 };
 
 export default nextConfig;
