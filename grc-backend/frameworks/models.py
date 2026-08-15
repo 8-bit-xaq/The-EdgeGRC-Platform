@@ -146,6 +146,10 @@ class TestPlan(models.Model):
     test_methodology = models.JSONField(default=list, blank=True)
     test_steps = models.TextField(blank=True, null=True, help_text="Step-by-step instructions for the auditor.")
     expected_evidence = models.TextField(blank=True, null=True, help_text="What artifacts must be provided to pass?")
+    
+    # --- ADD THIS FIELD ---
+    attachment = models.FileField(upload_to='test_plans/', null=True, blank=True)
+    
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):

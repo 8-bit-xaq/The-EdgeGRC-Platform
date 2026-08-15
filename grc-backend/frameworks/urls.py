@@ -21,13 +21,14 @@ from .views import (
     NotificationListView,
     NotificationUpdateView,
     SystemUpdateView,
+    HTTPSConfigurationView
 )
 
 urlpatterns = [
     path('controls/', ControlListCreateView.as_view()),
     path('controls/<str:control_id>/', ControlDetailView.as_view()),
     
-    # NEW: Assessment & Test Plan endpoints
+    # Assessment & Test Plan endpoints
     path('controls/<str:control_id>/test-plan/', TestPlanRetrieveUpdateView.as_view()),
     path('controls/<str:control_id>/assessments/', AssessmentActivityListCreateView.as_view()),
     path('assessments/<int:pk>/', AssessmentActivityDetailView.as_view()),
@@ -49,4 +50,5 @@ urlpatterns = [
     path('notifications/read/', NotificationUpdateView.as_view()), 
     path('notifications/<int:pk>/', NotificationUpdateView.as_view()),
     path('update/', SystemUpdateView.as_view()),
+    path('system/https-config/', HTTPSConfigurationView.as_view(), name='https-config'),
 ]

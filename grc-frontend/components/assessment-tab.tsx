@@ -1,7 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
-import { CheckCircle, Send, Trash2, Play, ClipboardCheck, ClipboardList, History, CalendarClock } from "lucide-react"
+import { CheckCircle, Send, Trash2, Play, ClipboardCheck, ClipboardList, History, CalendarClock, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
@@ -40,6 +40,10 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
   const [testSteps, setTestSteps] = useState("")
   const [expectedEvidence, setExpectedEvidence] = useState("")
   const [isSavingTestPlan, setIsSavingTestPlan] = useState(false)
+  
+  // --- NEW: Test Plan Attachment State ---
+  const [testPlanFile, setTestPlanFile] = useState<File | null>(null)
+  const [existingAttachment, setExistingAttachment] = useState<{name: string, url: string} | null>(null)
 
   // Scheduling State
   const [testingFrequency, setTestingFrequency] = useState<TestingFrequency>("None")
@@ -69,10 +73,21 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
       setTestMethodology(control.test_plan.test_methodology || [])
       setTestSteps(control.test_plan.test_steps ?? "")
       setExpectedEvidence(control.test_plan.expected_evidence ?? "")
+      
+      // Hydrate existing attachment if present
+      if (control.test_plan.attachment_name && control.test_plan.attachment_url) {
+        setExistingAttachment({ 
+          name: control.test_plan.attachment_name, 
+          url: control.test_plan.attachment_url 
+        })
+      } else {
+        setExistingAttachment(null)
+      }
     } else {
       setTestMethodology([])
       setTestSteps("")
       setExpectedEvidence("")
+      setExistingAttachment(null)
     }
 
     // Assessments
@@ -118,19 +133,36 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
     }
   }
 
+  // --- REFACTORED: Send FormData to handle the file attachment ---
   async function handleSaveTestPlan() {
     setIsSavingTestPlan(true)
     try {
-      const res = await fetchApi(`controls/${control.id}/test-plan/`, {
-        method: "PUT",
-        body: JSON.stringify({
-          test_methodology: testMethodology,
-          test_steps: testSteps,
-          expected_evidence: expectedEvidence
-        })
+      const formData = new FormData()
+      
+      // Send the methodology array as a stringified JSON string for the Django JSONField
+      formData.append("test_methodology", JSON.stringify(testMethodology))
+      formData.append("test_steps", testSteps || "")
+      formData.append("expected_evidence", expectedEvidence || "")
+      
+      if (testPlanFile) {
+        formData.append("attachment", testPlanFile)
+      }
+
+      // Bypass fetchApi wrapper to allow the browser to auto-set the multipart boundary header
+      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
+      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/controls/${control.id}/test-plan/`, {
+        method: "PATCH",
+        headers: { "Authorization": `Token ${token}` },
+        body: formData
       })
-      if (res.ok) toast.success("Test Plan saved")
-      else toast.error("Failed to save Test Plan")
+
+      if (res.ok) {
+        toast.success("Test Plan saved")
+        setTestPlanFile(null)
+        onRefresh()
+      } else {
+        toast.error("Failed to save Test Plan")
+      }
     } catch (err) {
       toast.error("Network error saving Test Plan")
     } finally {
@@ -311,6 +343,7 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
               })}
             </div>
           </div>
+          
           <div className="grid sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
               <Label className="text-xs text-muted-foreground uppercase tracking-wider">Test Steps</Label>
@@ -335,6 +368,27 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
               />
             </div>
           </div>
+
+          {/* --- NEW: Test Plan Attachment Widget --- */}
+          <div className="grid gap-3 mt-2 pt-4 border-t border-border/50">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider">Test Plan Attachment</Label>
+            <div className="flex flex-col sm:flex-row sm:items-center gap-4">
+              <Input 
+                type="file" 
+                onChange={(e) => setTestPlanFile(e.target.files?.[0] || null)}
+                disabled={!isAdmin && !isAuditor}
+                className="max-w-sm bg-background"
+              />
+              {existingAttachment && !testPlanFile && (
+                <a href={existingAttachment.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-primary hover:underline flex items-center gap-2">
+                  <FileText className="size-4" />
+                  {existingAttachment.name}
+                </a>
+              )}
+            </div>
+            <p className="text-[10px] text-muted-foreground">Upload a filled-out testing matrix, evidence request sheet, or auditor workpaper.</p>
+          </div>
+
         </div>
       </div>
 

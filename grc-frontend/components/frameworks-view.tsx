@@ -5,6 +5,7 @@ import { Plus, X, UploadCloud } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { FrameworkUploader } from "@/components/framework-uploader"
 import { ControlsTable } from "@/components/controls-table"
+import { fetchApi } from "@/lib/api"
 
 interface FrameworksViewProps {
   targetControlId?: string | null
@@ -19,18 +20,12 @@ export function FrameworksView({ targetControlId, onClearTarget, targetFilter, o
   const [role, setRole] = useState<string | null>(null)
 
   useEffect(() => {
-    // 1. Get role and token from storage
+    // 1. Get role from storage
     const savedRole = localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role");
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token");
     setRole(savedRole);
 
     // 2. Fetch controls to decide if we should show the importer
-    fetch("/api/controls/", {
-      headers: {
-        "Authorization": `Token ${token}`,
-        "Content-Type": "application/json"
-      }
-    })
+    fetchApi("controls/")
       .then((res) => {
         if (!res.ok) throw new Error("Failed to fetch API")
         return res.json()

@@ -1,26 +1,35 @@
 "use client"
 
+/**
+ * @fileoverview Workspace Settings UI Component.
+ * Handles organization profile customization, appliance backup/restore, 
+ * platform updates, session management, and SSL certificate generation.
+ */
+
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import {
   Building2,
   DatabaseBackup,
-  Laptop,
   Loader2,
   Monitor,
   ShieldCheck,
-  Smartphone,
   Trash2,
   Upload,
   ArchiveRestore,
   UploadCloud,
-  AlertCircle
+  AlertCircle,
+  KeyRound,
+  Download,
+  Info
 } from "lucide-react"
+
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
 import {
   Card,
   CardContent,
@@ -52,6 +61,9 @@ interface SessionRow {
 
 const SESSION_TIMEOUTS = ["15 minutes", "30 minutes", "1 hour", "4 hours", "8 hours"]
 
+/**
+ * WorkspaceSettings Component
+ */
 export function WorkspaceSettings() {
   const { organization, updateOrganization } = useOrganization()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -70,6 +82,26 @@ export function WorkspaceSettings() {
   const [workspaceName, setWorkspaceName] = useState(organization.workspaceName)
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(organization.logoDataUrl)
 
+  // Security & Backup draft state
+  const [sessionTimeout, setSessionTimeout] = useState("30 minutes")
+  const [sessions, setSessions] = useState<SessionRow[]>([])
+  const [saving, setSaving] = useState(false)
+  const [isLoadingSessions, setIsLoadingSessions] = useState(false)
+  
+  // Backup / Restore / Update state
+  const [isBackingUp, setIsBackingUp] = useState(false)
+  const [isRestoring, setIsRestoring] = useState(false)
+  const [restoreFile, setRestoreFile] = useState<File | null>(null)
+  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
+  const [isUpdating, setIsUpdating] = useState(false)
+
+  // HTTPS & Trust State
+  const [isHttpsEnabled, setIsHttpsEnabled] = useState(
+    typeof window !== "undefined" && window.location.protocol === "https:"
+  )
+  const [isGeneratingSSL, setIsGeneratingSSL] = useState(false)
+  const [isDownloadingCert, setIsDownloadingCert] = useState(false)
+
   // Sync local form inputs when the global context loads from storage
   useEffect(() => {
     setCompanyName(organization.companyName)
@@ -84,19 +116,6 @@ export function WorkspaceSettings() {
       .then((data) => setAppVersion(data.version))
       .catch(() => setAppVersion("1.0.0"))
   }, [])
-
-  // Security & Backup draft state
-  const [sessionTimeout, setSessionTimeout] = useState("30 minutes")
-  const [sessions, setSessions] = useState<SessionRow[]>([])
-  const [saving, setSaving] = useState(false)
-  const [isLoadingSessions, setIsLoadingSessions] = useState(false)
-  
-  // Backup / Restore / Update state
-  const [isBackingUp, setIsBackingUp] = useState(false)
-  const [isRestoring, setIsRestoring] = useState(false)
-  const [restoreFile, setRestoreFile] = useState<File | null>(null)
-  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
-  const [isUpdating, setIsUpdating] = useState(false)
 
   useEffect(() => {
     const savedRole = localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role")
@@ -169,7 +188,6 @@ export function WorkspaceSettings() {
       })
       
       if (res.ok) {
-        // Visual deletion
         setSessions((prev) => prev.filter((s) => s.id !== id))
         toast.success("Session revoked", { description: "That device has been securely signed out." })
       } else {
@@ -287,13 +305,11 @@ export function WorkspaceSettings() {
     formData.append("file", file)
 
     try {
-      // Bypass fetchApi to prevent application/json headers from breaking the multipart upload
       const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
       const res = await fetch("/api/update/", {
         method: "POST",
         headers: {
           "Authorization": `Token ${token}`
-          // CRITICAL: Do NOT set Content-Type here. The browser must set it automatically.
         },
         body: formData,
       })
@@ -313,6 +329,65 @@ export function WorkspaceSettings() {
     }
   } 
 
+  async function handleEnableHTTPS(checked: boolean) {
+    if (!checked) {
+      toast.info("HTTPS cannot be disabled via the UI for security reasons.")
+      return
+    }
+
+    setIsGeneratingSSL(true)
+    try {
+      const res = await fetchApi("system/https-config/", {
+        method: "POST",
+        body: JSON.stringify({ common_name: window.location.hostname || "edge-grc.local" }),
+      })
+
+      if (!res.ok) throw new Error("Failed to configure HTTPS")
+
+      toast.success("HTTPS Enabled", { description: "Nginx reloaded. The page will refresh securely in 3 seconds." })
+      setIsHttpsEnabled(true)
+      
+      setTimeout(() => {
+        window.location.href = `https://${window.location.host}${window.location.pathname}`
+      }, 3000)
+
+    } catch (err) {
+      toast.error("Configuration Failed", { description: "Ensure the backend has permissions to write files and reload Nginx." })
+      setIsHttpsEnabled(false)
+    } finally {
+      setIsGeneratingSSL(false)
+    }
+  }
+
+  async function handleDownloadPublicCert() {
+    setIsDownloadingCert(true)
+    try {
+      const res = await fetchApi("system/https-config/", { method: "GET" })
+      
+      if (res.status === 404) {
+        toast.error("Certificate missing", { description: "You must enable HTTPS before downloading the certificate." })
+        return
+      }
+      if (!res.ok) throw new Error("Failed to download certificate")
+
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "edge-grc-root.pem"
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      toast.success("Certificate downloaded", { description: "Install this in your OS Trusted Root store." })
+    } catch (err) {
+      toast.error("Download Failed", { description: "Could not retrieve the certificate." })
+    } finally {
+      setIsDownloadingCert(false)
+    }
+  }
+
   return (
     <div className="grid gap-6">
       <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-6">
@@ -321,7 +396,7 @@ export function WorkspaceSettings() {
           <TabsTrigger value="security">Security &amp; Access</TabsTrigger>
         </TabsList>
 
-        {/* Organization */}
+        {/* Organization Tab */}
         {isAdmin && (
           <TabsContent value="organization" className="grid gap-6">
             <Card>
@@ -405,6 +480,7 @@ export function WorkspaceSettings() {
               </CardContent>
             </Card>
             
+            {/* Data Management Card */}
             <Card>
               <CardHeader>
                 <CardTitle>Data Management</CardTitle>
@@ -451,6 +527,7 @@ export function WorkspaceSettings() {
               </CardContent>
             </Card>
 
+            {/* Platform Updates Card */}
             <Card className="border-purple-500/20 shadow-sm">
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -495,6 +572,7 @@ export function WorkspaceSettings() {
           </TabsContent>
         )}
 
+        {/* Security & Access Tab */}
         <TabsContent value="security" className="grid gap-6">
           <Card>
             <CardHeader>
@@ -524,70 +602,125 @@ export function WorkspaceSettings() {
           </Card>
                   
           {isAdmin && (
-            <Card>
-              <CardHeader>
-                <CardTitle>Active sessions</CardTitle>
-                <CardDescription>
-                  Devices currently signed in to this workspace. Revoke any you don&apos;t recognize.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {sessions.length === 0 ? (
-                  <p className="py-6 text-center text-sm text-muted-foreground">
-                    No other active sessions.
-                  </p>
-                ) : (
-                  <ul className="grid gap-1">
-                    {sessions.map((session, index) => {
-                      const Icon = session.icon
-                      return (
-                        <li key={session.id}>
-                          {index > 0 && <Separator className="my-1" />}
-                          <div className="flex items-center gap-3 py-3">
-                            <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-                              <Icon className="size-4" aria-hidden />
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2">
-                                <p className="truncate text-sm font-medium text-card-foreground">
-                                  {session.device}
-                                </p>
-                                {session.current && (
-                                  <Badge variant="secondary" className="shrink-0">
-                                    Current
-                                  </Badge>
-                                )}
+            <>
+              {/* Appliance HTTPS & Trust Card */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <KeyRound className="size-4 text-primary" />
+                    Appliance HTTPS & Trust
+                  </CardTitle>
+                  <CardDescription className="text-xs">
+                    Automate local HTTPS configuration and download the root certificate for your machine.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-6">
+                  <div className="flex items-center justify-between rounded-lg border border-border bg-muted/40 p-4">
+                    <div className="space-y-1 pr-4">
+                      <p className="text-sm font-medium text-foreground">Enforce HTTPS</p>
+                      <p className="text-xs text-muted-foreground text-balance">
+                        Automatically generates cryptographic assets and restarts the proxy to listen on port 443.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {isGeneratingSSL && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+                      <Switch 
+                        checked={isHttpsEnabled} 
+                        onCheckedChange={handleEnableHTTPS}
+                        disabled={isGeneratingSSL || isHttpsEnabled}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="space-y-1 flex-1">
+                      <p className="text-sm font-medium text-foreground">Local Machine Trust</p>
+                      <p className="text-xs text-muted-foreground">
+                        Download the public <code className="font-mono bg-muted px-1 py-0.5 rounded text-[11px]">.pem</code> file and install it in your operating system's Trusted Root Certification Authorities store to eliminate browser security warnings.
+                      </p>
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      onClick={handleDownloadPublicCert}
+                      disabled={isDownloadingCert || !isHttpsEnabled}
+                      className="shrink-0 w-full sm:w-auto"
+                    >
+                      {isDownloadingCert ? (
+                        <><Loader2 className="mr-2 size-4 animate-spin" /> Fetching...</>
+                      ) : (
+                        <><Download className="mr-2 size-4" /> Download Trust Certificate</>
+                      )}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>Active sessions</CardTitle>
+                  <CardDescription>
+                    Devices currently signed in to this workspace. Revoke any you don&apos;t recognize.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {sessions.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-muted-foreground">
+                      No other active sessions.
+                    </p>
+                  ) : (
+                    <ul className="grid gap-1">
+                      {sessions.map((session, index) => {
+                        const Icon = session.icon
+                        return (
+                          <li key={session.id}>
+                            {index > 0 && <Separator className="my-1" />}
+                            <div className="flex items-center gap-3 py-3">
+                              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+                                <Icon className="size-4" aria-hidden />
                               </div>
-                              <p className="truncate text-xs text-muted-foreground">
-                                {session.meta} · {session.location} · {session.lastActive}
-                              </p>
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-2">
+                                  <p className="truncate text-sm font-medium text-card-foreground">
+                                    {session.device}
+                                  </p>
+                                  {session.current && (
+                                    <Badge variant="secondary" className="shrink-0">
+                                      Current
+                                    </Badge>
+                                  )}
+                                </div>
+                                <p className="truncate text-xs text-muted-foreground">
+                                  {session.meta} · {session.location} · {session.lastActive}
+                                </p>
+                              </div>
+                              {session.current ? (
+                                <span className="hidden text-xs text-muted-foreground sm:inline">
+                                  This device
+                                </span>
+                              ) : (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => revokeSession(session.id)}
+                                >
+                                  Revoke
+                                </Button>
+                              )}
                             </div>
-                            {session.current ? (
-                              <span className="hidden text-xs text-muted-foreground sm:inline">
-                                This device
-                              </span>
-                            ) : (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => revokeSession(session.id)}
-                              >
-                                Revoke
-                              </Button>
-                            )}
-                          </div>
-                        </li>
-                      )
-                    })}
-                  </ul>
-                )}
-              </CardContent>
-            </Card>
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  )}
+                </CardContent>
+              </Card>
+            </>
           )}
         </TabsContent>
       </Tabs>
 
+      {/* Danger Zone */}
       {isAdmin && (
         <Card className="border-destructive/40">
           <CardHeader>
@@ -616,6 +749,7 @@ export function WorkspaceSettings() {
         </Card>
       )}
 
+      {/* Confirmation Dialog for System Restore */}
       <Dialog open={showRestoreConfirm} onOpenChange={setShowRestoreConfirm}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>

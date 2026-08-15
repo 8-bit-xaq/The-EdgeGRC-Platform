@@ -37,11 +37,15 @@ export interface RemediationTask {
   updated_at: string
 }
 
+// Inside lib/controls.ts
 export interface TestPlan {
   id: number
   test_methodology: TestMethodology[]
   test_steps?: string
   expected_evidence?: string
+  attachment?: string
+  attachment_name?: string
+  attachment_url?: string
   updated_at: string
 }
 

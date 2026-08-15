@@ -17,6 +17,11 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from django.http import HttpResponse
 
+import datetime
+from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography import x509
+from cryptography.x509.oid import NameOID
 import io
 import os
 import zipfile
@@ -27,10 +32,8 @@ import sys
 import threading
 import shutil
 
-# --- Import PDF Service ---
 from .services.pdf_generator import generate_audit_pdf
 
-# --- Import Strict RBAC Permissions ---
 from .permissions import (
     IsAdminUserOrReadOnly, 
     ControlMatrixPermissions, 
@@ -43,8 +46,8 @@ from .permissions import (
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
     queryset = TestPlan.objects.all()
     serializer_class = TestPlanSerializer
-    # STRICT RBAC APPLIED:
     permission_classes = [IsAuthenticated, TestPlanPermissions]
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
     
     def get_object(self):
         control_id = self.kwargs['control_id']
@@ -55,7 +58,6 @@ class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
 
 class AssessmentActivityListCreateView(generics.ListCreateAPIView):
     serializer_class = AssessmentActivitySerializer
-    # STRICT RBAC APPLIED:
     permission_classes = [IsAuthenticated, AssessmentPermissions]
 
     def get_queryset(self):
@@ -71,7 +73,6 @@ class AssessmentActivityListCreateView(generics.ListCreateAPIView):
 class AssessmentActivityDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = AssessmentActivity.objects.all()
     serializer_class = AssessmentActivitySerializer
-    # STRICT RBAC APPLIED:
     permission_classes = [IsAuthenticated, AssessmentPermissions]
 
 
@@ -80,7 +81,6 @@ class RemediationTaskListCreateView(generics.ListCreateAPIView):
     serializer_class = RemediationTaskSerializer
     permission_classes = [IsAuthenticated]
 
-    # --- NEW: Auto-assign the requested_by field upon creation ---
     def perform_create(self, serializer):
         serializer.save(requested_by=self.request.user)
 
@@ -121,13 +121,11 @@ class ControlDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Control.objects.all()
     serializer_class = ControlSerializer
     lookup_field = 'control_id'
-    # STRICT RBAC APPLIED: Payload inspection ensures Contributors can't approve
     permission_classes = [IsAuthenticated, ControlMatrixPermissions]
 
 
 class ProofUploadView(views.APIView):
     parser_classes = (MultiPartParser, FormParser)
-    # STRICT RBAC APPLIED: Blocks Reviewers and Auditors entirely
     permission_classes = [IsAuthenticated, EvidenceUploadPermissions]
 
     def post(self, request, control_id):
@@ -146,7 +144,6 @@ class ProofUploadView(views.APIView):
 
 class ProofDeleteView(generics.DestroyAPIView):
     queryset = Proof.objects.all()
-    # STRICT RBAC APPLIED: Only Doers and Admins can delete proofs
     permission_classes = [IsAuthenticated, EvidenceUploadPermissions]
     
     def perform_destroy(self, instance):
@@ -182,16 +179,13 @@ class CustomAuthToken(ObtainAuthToken):
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data['user']
         
-        # Force a fresh token on every new login to allow multi-device tracking
         Token.objects.filter(user=user).delete()
         token = Token.objects.create(user=user)
         
-        # Extract the device metadata safely
         user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown Browser')[:250]
         raw_ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', '')).split(',')[0].strip()
         ip_address = raw_ip if raw_ip else None
         
-        # Save the active session to our database table
         ActiveSession.objects.update_or_create(
             token_key=token.key,
             defaults={
@@ -222,7 +216,6 @@ class ActiveSessionsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # 1. Enforce Admin-only access using your custom profile roles
         user_role = getattr(request.user.profile, 'role', '') if hasattr(request.user, 'profile') else ''
         if user_role != 'Admin' and not request.user.is_superuser:
             return Response(
@@ -230,18 +223,14 @@ class ActiveSessionsView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # 2. Query ALL active sessions across the entire platform
-        # Using select_related('user') prevents the N+1 query problem
         sessions = ActiveSession.objects.select_related('user').all().order_by('-last_active')
         data = []
         
-        # Identify the token making this exact request
         current_token = request.auth.key if hasattr(request, 'auth') and request.auth else None
 
         for s in sessions:
             data.append({
                 'id': s.token_key,
-                # Inject the username into the device string so the Admin knows who owns it
                 'device': f"[{s.user.username}] {s.device_info}", 
                 'meta': s.ip_address or "Unknown IP",
                 'location': s.location,
@@ -250,6 +239,7 @@ class ActiveSessionsView(APIView):
             })
             
         return Response(data)
+
     def delete(self, request):
         user_role = getattr(request.user.profile, 'role', '') if hasattr(request.user, 'profile') else ''
         if user_role != 'Admin' and not request.user.is_superuser:
@@ -262,26 +252,22 @@ class ActiveSessionsView(APIView):
         if not token_key:
             return Response({"error": "Session ID is required."}, status=status.HTTP_400_BAD_REQUEST)
         
-        # 1. Delete the actual DRF authentication token so the device's API requests start failing
         Token.objects.filter(key=token_key).delete()
-        
-        # 2. Delete our tracking record from the active sessions table
         ActiveSession.objects.filter(token_key=token_key).delete()
         
         return Response({"message": "Session successfully revoked."}, status=status.HTTP_200_OK)
+
 
 class ExportAuditPackageView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # --- NEW RBAC SECURITY CHECK ---
         user_role = getattr(request.user.profile, 'role', '')
         if user_role not in ['Admin', 'Auditor', 'Executive']:
             return Response(
                 {"error": "You do not have permission to export audit packages."}, 
                 status=status.HTTP_403_FORBIDDEN
             )
-        # -------------------------------
 
         scope = request.data.get('scope', {})
         redact = request.data.get('redact', True)
@@ -306,7 +292,6 @@ class ExportAuditPackageView(APIView):
             }
         }
         
-        # 1. Gather Controls & Evidence
         if scope.get('controls') or scope.get('evidence'):
             controls = Control.objects.prefetch_related(
                 'proofs', 'remediation_tasks', 'cross_walked_controls', 
@@ -322,13 +307,11 @@ class ExportAuditPackageView(APIView):
                     
             export_data['controls'] = controls_data
             
-        # 1.5 Gather Risk Register
         if scope.get('risks'):
             risks = Risk.objects.all().prefetch_related('mitigating_controls')
             risks_data = RiskSerializer(risks, many=True, context={'request': request}).data
             export_data['risks'] = risks_data
 
-        # 2. Gather Audit Logs
         if scope.get('logs'):
             logs = LogEntry.objects.select_related('actor').all().order_by('-timestamp')
             log_data = LogEntrySerializer(logs, many=True, context={'request': request}).data
@@ -339,7 +322,6 @@ class ExportAuditPackageView(APIView):
                     
             export_data['audit_logs'] = log_data
 
-        # 3. Gather Organization Summary
         if scope.get('summary'):
             total_controls = Control.objects.count()
             passing_controls = Control.objects.filter(status='Passing').count()
@@ -399,21 +381,19 @@ class ExportAuditPackageView(APIView):
                 "risk_residual_low": residual_low,
             }
 
-        # 4. Handle PDF Export
         if export_format == 'pdf':
-            # Delegate to the newly abstracted PDF generator service
             pdf_buffer = generate_audit_pdf(export_data, company_name, export_password, logo_data_url)
             response = HttpResponse(pdf_buffer.getvalue(), content_type='application/pdf')
             response['Content-Disposition'] = 'attachment; filename="audit-report.pdf"'
             return response
 
-        # 5. Handle ZIP Export
         if export_format == 'zip':
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
                 zip_file.writestr('audit_summary.json', json.dumps(export_data, indent=2))
                 
                 if scope.get('evidence'):
+                    # Pack standard Proof files
                     proofs = Proof.objects.all()
                     for proof in proofs:
                         if proof.file:
@@ -421,13 +401,22 @@ class ExportAuditPackageView(APIView):
                             try:
                                 zip_file.writestr(file_path, proof.file.read())
                             except Exception as e:
-                                print(f"Failed to zip file {file_path}: {e}")
+                                print(f"Failed to zip proof file {file_path}: {e}")
+                    
+                    # Pack the new Test Plan Attachments
+                    test_plans = TestPlan.objects.exclude(attachment='')
+                    for tp in test_plans:
+                        if tp.attachment:
+                            file_path = f"test_plans/{tp.control.control_id}/{os.path.basename(tp.attachment.name)}"
+                            try:
+                                zip_file.writestr(file_path, tp.attachment.read())
+                            except Exception as e:
+                                print(f"Failed to zip test plan file {file_path}: {e}")
                                 
             response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
             response['Content-Disposition'] = 'attachment; filename="audit-package.zip"'
             return response
 
-        # Default JSON response
         return Response({
             "message": "Export generated successfully",
             "data": export_data
@@ -435,10 +424,6 @@ class ExportAuditPackageView(APIView):
 
 
 class SystemBackupView(APIView):
-    """
-    Generates a full snapshot of the SQLite database and all uploaded media files.
-    Strictly limited to Admins.
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -448,12 +433,10 @@ class SystemBackupView(APIView):
         zip_buffer = io.BytesIO()
         
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # Backup the SQLite Database
             db_path = settings.DATABASES['default']['NAME']
             if os.path.exists(db_path):
                 zip_file.write(db_path, arcname='db.sqlite3')
             
-            # Backup the Physical Evidence Files
             media_root = settings.MEDIA_ROOT
             if os.path.exists(media_root):
                 for folder_name, subfolders, filenames in os.walk(media_root):
@@ -469,10 +452,6 @@ class SystemBackupView(APIView):
 
 
 class SystemRestoreView(APIView):
-    """
-    Restores the system from a ZIP backup containing db.sqlite3 and media/.
-    Strictly limited to Admins.
-    """
     permission_classes = [IsAuthenticated]
     parser_classes = (MultiPartParser, FormParser)
 
@@ -550,19 +529,15 @@ class NotificationUpdateView(APIView):
 
 
 def execute_system_update(zip_path, base_dir):
-    """Runs in the background to apply the update and restart services (Dev Mode)."""
     try:
-        # 1. Extract the new code over the live directory
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
             zip_ref.extractall(base_dir)
             
-        # 2. Apply Python Database Migrations (if any)
         backend_dir = os.path.join(base_dir, 'grc-backend')
         manage_path = os.path.join(backend_dir, 'manage.py')
         if os.path.exists(manage_path):
             subprocess.run([sys.executable, manage_path, 'migrate'], cwd=backend_dir, check=True)
             
-        # 3. Restart the systemd services to load the new code
         subprocess.run(['sudo', 'systemctl', 'restart', 'grc-backends', 'grc-frontend'], check=True)
         
     except Exception as e:
@@ -573,10 +548,6 @@ def execute_system_update(zip_path, base_dir):
 
 
 class SystemUpdateView(APIView):
-    """
-    Receives an update .zip package, initiates the update process, 
-    and returns a success response before the server reboots.
-    """
     permission_classes = [IsAuthenticated]
     parser_classes = (MultiPartParser, FormParser)
 
@@ -606,18 +577,12 @@ class SystemUpdateView(APIView):
 
 
 class FactoryResetView(APIView):
-    """
-    Verifies the admin password and completely wipes the GRC workspace 
-    data (Controls, Risks, Tasks, Evidence) while preserving User accounts.
-    """
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # 1. Ensure the user is an Admin
         if getattr(request.user.profile, 'role', '') != 'Admin':
             return Response({"error": "Only Admins can perform a factory reset."}, status=status.HTTP_403_FORBIDDEN)
 
-        # 2. Verify the password
         password = request.data.get('password')
         if not password:
             return Response({"error": "Password is required."}, status=status.HTTP_400_BAD_REQUEST)
@@ -626,14 +591,10 @@ class FactoryResetView(APIView):
             return Response({"error": "Incorrect password."}, status=status.HTTP_403_FORBIDDEN)
 
         try:
-            # 3. Purge the Database
-            # Deleting controls automatically cascades and deletes all related Proofs, 
-            # RemediationTasks, TestPlans, and AssessmentActivities due to SQL foreign keys.
             Control.objects.all().delete()
             Risk.objects.all().delete()
             Notification.objects.all().delete()
 
-            # 4. Wipe physical evidence files from the server
             evidence_dir = os.path.join(settings.MEDIA_ROOT, 'evidence_proofs')
             if os.path.exists(evidence_dir):
                 shutil.rmtree(evidence_dir)
@@ -642,3 +603,71 @@ class FactoryResetView(APIView):
             return Response({"message": "Workspace successfully purged."})
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class HTTPSConfigurationView(APIView):
+    """
+    Manages local HTTPS configuration. Generates certs to disk and reloads Nginx,
+    or serves the public certificate for local machine trust.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if getattr(request.user.profile, 'role', '') != 'Admin':
+            return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+
+        cert_path = os.path.join(settings.BASE_DIR, 'configs', 'ssl', 'appliance_cert.pem')
+        
+        if not os.path.exists(cert_path):
+            return Response({"error": "Certificate has not been generated yet."}, status=status.HTTP_404_NOT_FOUND)
+
+        with open(cert_path, 'rb') as f:
+            response = HttpResponse(f.read(), content_type='application/x-x509-ca-cert')
+            response['Content-Disposition'] = 'attachment; filename="edge-grc-root.pem"'
+            return response
+
+    def post(self, request):
+        if getattr(request.user.profile, 'role', '') != 'Admin':
+            return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
+
+        # 1. Generate Cryptographic Assets
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        common_name = request.data.get('common_name', 'edge-grc.local')
+        
+        subject = issuer = x509.Name([
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"Edge-GRC Appliance"),
+            x509.NameAttribute(NameOID.COMMON_NAME, common_name),
+        ])
+
+        cert = x509.CertificateBuilder().subject_name(
+            subject
+        ).issuer_name(
+            issuer
+        ).public_key(
+            private_key.public_key()
+        ).serial_number(
+            x509.random_serial_number()
+        ).not_valid_before(
+            timezone.now()
+        ).not_valid_after(
+            timezone.now() + datetime.timedelta(days=365)
+        ).sign(private_key, hashes.SHA256())
+
+        cert_pem = cert.public_bytes(serialization.Encoding.PEM)
+        key_pem = private_key.private_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PrivateFormat.TraditionalOpenSSL,
+            encryption_algorithm=serialization.NoEncryption()
+        )
+
+        # 2. Write to the Host Filesystem
+        ssl_dir = os.path.join(settings.BASE_DIR, 'configs', 'ssl')
+        os.makedirs(ssl_dir, exist_ok=True)
+
+        with open(os.path.join(ssl_dir, 'appliance_cert.pem'), 'wb') as f:
+            f.write(cert_pem)
+        with open(os.path.join(ssl_dir, 'appliance_key.pem'), 'wb') as f:
+            f.write(key_pem)
+
+        # The Systemd watcher automatically detects this file change and reloads Nginx.
+
+        return Response({"status": "HTTPS successfully enabled on the appliance."})

@@ -77,9 +77,29 @@ class RemediationTaskSerializer(serializers.ModelSerializer):
         ]
 
 class TestPlanSerializer(serializers.ModelSerializer):
+    attachment_name = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
+
     class Meta:
         model = TestPlan
-        fields = ['id', 'test_methodology', 'test_steps', 'expected_evidence', 'updated_at']
+        fields = [
+            'id', 'test_methodology', 'test_steps', 'expected_evidence', 
+            'attachment', 'attachment_name', 'attachment_url', 'updated_at'
+        ]
+        extra_kwargs = {
+            'attachment': {'write_only': True}
+        }
+
+    def get_attachment_name(self, obj):
+        return os.path.basename(obj.attachment.name) if obj.attachment else None
+
+    def get_attachment_url(self, obj):
+        if obj.attachment:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.attachment.url)
+            return obj.attachment.url
+        return None
 
 class AssessmentActivitySerializer(serializers.ModelSerializer):
     assessor_username = serializers.ReadOnlyField(source='assessor.username')
