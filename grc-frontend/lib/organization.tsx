@@ -1,12 +1,12 @@
 "use client"
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
+import { fetchApi } from "@/lib/api"
 
 export interface Organization {
   companyName: string
   domain: string
   workspaceName: string
-  /** Base64 data URL for an uploaded company logo, or null to use the default mark. */
   logoDataUrl: string | null
 }
 
@@ -19,7 +19,6 @@ export const DEFAULT_ORGANIZATION: Organization = {
 
 interface OrganizationContextValue {
   organization: Organization
-  /** Merge a partial update into the current organization record. */
   updateOrganization: (patch: Partial<Organization>) => void
 }
 
@@ -28,23 +27,38 @@ const OrganizationContext = createContext<OrganizationContextValue | null>(null)
 export function OrganizationProvider({ children }: { children: React.ReactNode }) {
   const [organization, setOrganization] = useState<Organization>(DEFAULT_ORGANIZATION)
 
-  // NEW: Load the saved organization settings on initial mount
+  // Fetch the global settings from the database on mount
   useEffect(() => {
-    const stored = localStorage.getItem("grc_organization")
-    if (stored) {
-      try {
-        setOrganization(JSON.parse(stored))
-      } catch (e) {
-        console.error("Failed to parse stored organization data")
-      }
-    }
+    fetchApi("organization/")
+      .then(res => {
+        if (res.ok) return res.json()
+        throw new Error("Failed to fetch organization settings")
+      })
+      .then(data => {
+        setOrganization({
+          companyName: data.company_name || DEFAULT_ORGANIZATION.companyName,
+          workspaceName: data.workspace_name || DEFAULT_ORGANIZATION.workspaceName,
+          logoDataUrl: data.logo_data_url || null,
+          domain: DEFAULT_ORGANIZATION.domain, 
+        })
+      })
+      .catch(err => console.error(err))
   }, [])
 
-  // NEW: Save to local storage whenever settings are updated
+  // Save to backend whenever the Admin updates the settings
   const updateOrganization = useCallback((patch: Partial<Organization>) => {
     setOrganization((prev) => {
       const next = { ...prev, ...patch }
-      localStorage.setItem("grc_organization", JSON.stringify(next))
+      
+      fetchApi("organization/", {
+        method: "PUT",
+        body: JSON.stringify({
+          company_name: next.companyName,
+          workspace_name: next.workspaceName,
+          logo_data_url: next.logoDataUrl
+        })
+      }).catch(err => console.error("Failed to sync organization settings", err))
+      
       return next
     })
   }, [])

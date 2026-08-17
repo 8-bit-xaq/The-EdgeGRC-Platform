@@ -445,3 +445,13 @@ auditlog.register(Risk)
 auditlog.register(RemediationTask)
 auditlog.register(TestPlan)
 auditlog.register(AssessmentActivity)
+
+class OrganizationSettings(models.Model):
+    company_name = models.CharField(max_length=255, default="ByteTex")
+    workspace_name = models.CharField(max_length=255, default="Compliance Solutions")
+    logo_data_url = models.TextField(blank=True, null=True)
+
+    def save(self, *args, **kwargs):
+        # Force the ID to always be 1 so it acts as a global singleton
+        self.pk = 1
+        super().save(*args, **kwargs)

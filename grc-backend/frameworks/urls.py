@@ -21,7 +21,8 @@ from .views import (
     NotificationListView,
     NotificationUpdateView,
     SystemUpdateView,
-    HTTPSConfigurationView
+    HTTPSConfigurationView,
+    OrganizationSettingsView
 )
 
 urlpatterns = [
@@ -51,4 +52,5 @@ urlpatterns = [
     path('notifications/<int:pk>/', NotificationUpdateView.as_view()),
     path('update/', SystemUpdateView.as_view()),
     path('system/https-config/', HTTPSConfigurationView.as_view(), name='https-config'),
+    path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
 ]

@@ -5038,6 +5038,7 @@ import { RiskRegister } from "@/components/risk-register"
 import { OrganizationProvider } from "@/lib/organization"
 import { NotificationsProvider } from "@/lib/notifications"
 import { OnboardingWizard } from "@/components/onboarding-wizard"
+import { fetchApi } from "@/lib/api"
 
 const VIEW_META: Record<NavView, { title: string; subtitle: string }> = {
   dashboard: {
@@ -5101,9 +5102,7 @@ export function GrcApp({ onLogout }: GrcAppProps) {
       if (savedRole === "Admin") {
         try {
           const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-          const res = await fetch("/api/controls/", {
-            headers: { "Authorization": `Token ${token}` }
-          })
+          const res = await fetchApi("controls/")
           
           if (res.ok) {
             const data = await res.json()
@@ -6331,6 +6330,7 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { useOrganization } from "@/lib/organization"
 import { FrameworkUploader } from "@/components/framework-uploader"
+import { fetchApi } from "@/lib/api"
 import { toast } from "sonner"
 
 interface OnboardingWizardProps {
@@ -6340,7 +6340,7 @@ interface OnboardingWizardProps {
 export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const { organization, updateOrganization } = useOrganization()
   const [step, setStep] = useState(1)
-  
+
   // Security State
   const [userId, setUserId] = useState<string | null>(null)
   const [newPassword, setNewPassword] = useState("")
@@ -6351,7 +6351,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [companyName, setCompanyName] = useState("")
   const [workspaceName, setWorkspaceName] = useState("")
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(null)
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Fetch the current user's ID so we can PATCH their password
@@ -6360,60 +6360,62 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
 
     if (username && token) {
-      fetch("/api/users/", {
-        headers: { "Authorization": `Token ${token}` }
+      // Changed to fetchApi and removed the "/api/" prefix
+      fetchApi("users/")
+      .then(res => {
+        if (!res.ok) throw new Error("Failed to fetch users")
+          return res.json()
       })
-        .then(res => res.json())
-        .then(data => {
-          if (Array.isArray(data)) {
-            const currentUser = data.find((u: any) => u.username === username)
-            if (currentUser) {
-              setUserId(String(currentUser.id))
-            }
+      .then(data => {
+        if (Array.isArray(data)) {
+          const currentUser = data.find((u: any) => u.username === username)
+          if (currentUser) {
+            setUserId(String(currentUser.id))
           }
-        })
-        .catch(err => console.error("Failed to fetch user ID:", err))
+        }
+      })
+      .catch(err => console.error("Failed to fetch user ID:", err))
     }
   }, [])
 
   function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    if (!file.type.startsWith("image/")) {
-      toast.error("Unsupported file", { description: "Please choose an image file." })
-      return
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File too large", { description: "Logos must be 5MB or smaller." })
-      return
-    }
-
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      const img = new Image()
-      img.onload = () => {
-        const canvas = document.createElement("canvas")
-        const MAX_WIDTH = 256
-        let width = img.width
-        let height = img.height
-        
-        if (width > MAX_WIDTH) {
-          height = height * (MAX_WIDTH / width)
-          width = MAX_WIDTH
-        }
-        
-        canvas.width = width
-        canvas.height = height
-        
-        const ctx = canvas.getContext("2d")
-        ctx?.drawImage(img, 0, 0, width, height)
-        
-        const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.8)
-        setLogoDataUrl(compressedDataUrl)
+      if (!file.type.startsWith("image/")) {
+        toast.error("Unsupported file", { description: "Please choose an image file." })
+        return
       }
-      img.src = event.target?.result as string
-    }
-    reader.readAsDataURL(file)
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error("File too large", { description: "Logos must be 5MB or smaller." })
+        return
+      }
+
+      const reader = new FileReader()
+      reader.onload = (event) => {
+        const img = new Image()
+        img.onload = () => {
+          const canvas = document.createElement("canvas")
+          const MAX_WIDTH = 256
+          let width = img.width
+          let height = img.height
+
+          if (width > MAX_WIDTH) {
+            height = height * (MAX_WIDTH / width)
+            width = MAX_WIDTH
+          }
+
+          canvas.width = width
+          canvas.height = height
+
+          const ctx = canvas.getContext("2d")
+          ctx?.drawImage(img, 0, 0, width, height)
+
+          const compressedDataUrl = canvas.toDataURL("image/jpeg", 0.8)
+          setLogoDataUrl(compressedDataUrl)
+        }
+        img.src = event.target?.result as string
+      }
+      reader.readAsDataURL(file)
   }
 
   async function handleNextStep() {
@@ -6426,17 +6428,13 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         toast.error("Passwords Mismatch", { description: "The new password fields do not match." })
         return
       }
-      
+
       setIsUpdatingPassword(true)
-      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-      
+
       try {
-        const response = await fetch(`/api/users/${userId}/`, {
+        // Changed to fetchApi, removed the "/api/" prefix, and removed the manual token injection
+        const response = await fetchApi(`users/${userId}/`, {
           method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Token ${token}`
-          },
           body: JSON.stringify({ password: newPassword }),
         })
 
@@ -6458,8 +6456,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       }
       updateOrganization({
         companyName: companyName.trim(),
-        workspaceName: workspaceName.trim(),
-        logoDataUrl,
+                         workspaceName: workspaceName.trim(),
+                         logoDataUrl,
       })
       setStep(3)
     } else if (step === 3) {
@@ -6469,165 +6467,165 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
   return (
     <div className="min-h-screen w-full bg-muted/40 flex flex-col items-center justify-center p-4 sm:p-8">
-      
-      <div className="w-full max-w-2xl flex items-center justify-center mb-8 gap-3">
-        <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-          <ShieldCheck className="size-6" aria-hidden />
-        </div>
-        <div>
-          <h1 className="text-xl font-bold tracking-tight">ByteTex Appliance Setup</h1>
-          <p className="text-sm text-muted-foreground font-medium">Out-of-the-box Configuration</p>
-        </div>
+
+    <div className="w-full max-w-2xl flex items-center justify-center mb-8 gap-3">
+    <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+    <ShieldCheck className="size-6" aria-hidden />
+    </div>
+    <div>
+    <h1 className="text-xl font-bold tracking-tight">ByteTex Appliance Setup</h1>
+    <p className="text-sm text-muted-foreground font-medium">Out-of-the-box Configuration</p>
+    </div>
+    </div>
+
+    <div className="w-full max-w-2xl mb-6">
+    <div className="flex items-center justify-between relative">
+    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1 bg-border rounded-full" />
+    <div className="absolute left-0 top-1/2 -translate-y-1/2 h-1 bg-primary rounded-full transition-all duration-500" style={{ width: step === 1 ? '0%' : step === 2 ? '33%' : step === 3 ? '66%' : '100%' }} />
+
+    {[1, 2, 3, 4].map((num) => (
+      <div key={num} className={`relative z-10 flex flex-col items-center justify-center gap-2 transition-all duration-300 ${step >= num ? 'text-primary' : 'text-muted-foreground'}`}>
+      <div className={`size-8 rounded-full flex items-center justify-center text-sm font-bold border-2 bg-background transition-colors ${step >= num ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>
+      {step > num ? <CheckCircle2 className="size-5 text-primary" /> : num}
+      </div>
+      </div>
+    ))}
+    </div>
+    <div className="flex justify-between mt-2 text-xs font-semibold px-1 text-muted-foreground">
+    <span className={step >= 1 ? 'text-foreground' : ''}>Security</span>
+    <span className={step >= 2 ? 'text-foreground' : ''}>Branding</span>
+    <span className={step >= 3 ? 'text-foreground' : ''}>Framework</span>
+    <span className={step >= 4 ? 'text-foreground' : ''}>Complete</span>
+    </div>
+    </div>
+
+    <Card className="w-full max-w-2xl shadow-lg border-border/60">
+
+    {step === 1 && (
+      <>
+      <CardHeader className="text-center pb-8 pt-8">
+      <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-amber-500/10 text-amber-500 mb-4">
+      <LockKeyhole className="size-7" />
+      </div>
+      <CardTitle className="text-2xl">Secure Your Appliance</CardTitle>
+      <CardDescription className="text-base mt-2">
+      You are currently using the factory default credentials. Please change the master password to secure the appliance before continuing.
+      </CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-6 px-8 sm:px-16">
+      <div className="grid gap-2">
+      <Label htmlFor="new-password">New Master Password</Label>
+      <Input
+      id="new-password"
+      type="password"
+      value={newPassword}
+      onChange={(e) => setNewPassword(e.target.value)}
+      placeholder="At least 8 characters"
+      className="h-10"
+      />
+      </div>
+      <div className="grid gap-2">
+      <Label htmlFor="confirm-password">Confirm Password</Label>
+      <Input
+      id="confirm-password"
+      type="password"
+      value={confirmPassword}
+      onChange={(e) => setConfirmPassword(e.target.value)}
+      placeholder="Type password again"
+      className="h-10"
+      />
+      </div>
+      </CardContent>
+      <CardFooter className="px-8 pb-8 pt-4 flex justify-end border-t border-border mt-4 bg-muted/20 rounded-b-xl">
+      <Button size="lg" onClick={handleNextStep} disabled={isUpdatingPassword || !newPassword || !confirmPassword || !userId}>
+      {isUpdatingPassword ? "Securing Appliance..." : "Save & Continue"} <ArrowRight className="ml-2 size-4" />
+      </Button>
+      </CardFooter>
+      </>
+    )}
+
+    {step === 2 && (
+      <>
+      <CardHeader className="text-center pb-8 pt-8">
+      <CardTitle className="text-2xl">Welcome to your GRC Workspace</CardTitle>
+      <CardDescription className="text-base mt-2">Let&apos;s brand this appliance for your organization.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-8 px-8">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      <div className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted shadow-inner">
+      {logoDataUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={logoDataUrl} alt="Company logo" className="size-full object-cover" />
+      ) : (
+        <Building2 className="size-8 text-muted-foreground/50" aria-hidden />
+      )}
+      </div>
+      <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+      <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => fileInputRef.current?.click()}>
+      <Upload className="size-4" aria-hidden />
+      Upload Company Logo
+      </Button>
+      {logoDataUrl && (
+        <Button type="button" variant="ghost" size="sm" onClick={() => setLogoDataUrl(null)}>Remove</Button>
+      )}
+      </div>
+      <p className="text-xs text-muted-foreground">Square PNG or SVG recommended. Max 5MB.</p>
+      <input ref={fileInputRef} type="file" accept="image/*" className="sr-only" onChange={handleLogoChange} />
+      </div>
       </div>
 
-      <div className="w-full max-w-2xl mb-6">
-        <div className="flex items-center justify-between relative">
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1 bg-border rounded-full" />
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 h-1 bg-primary rounded-full transition-all duration-500" style={{ width: step === 1 ? '0%' : step === 2 ? '33%' : step === 3 ? '66%' : '100%' }} />
-          
-          {[1, 2, 3, 4].map((num) => (
-            <div key={num} className={`relative z-10 flex flex-col items-center justify-center gap-2 transition-all duration-300 ${step >= num ? 'text-primary' : 'text-muted-foreground'}`}>
-              <div className={`size-8 rounded-full flex items-center justify-center text-sm font-bold border-2 bg-background transition-colors ${step >= num ? 'border-primary text-primary' : 'border-border text-muted-foreground'}`}>
-                {step > num ? <CheckCircle2 className="size-5 text-primary" /> : num}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="flex justify-between mt-2 text-xs font-semibold px-1 text-muted-foreground">
-          <span className={step >= 1 ? 'text-foreground' : ''}>Security</span>
-          <span className={step >= 2 ? 'text-foreground' : ''}>Branding</span>
-          <span className={step >= 3 ? 'text-foreground' : ''}>Framework</span>
-          <span className={step >= 4 ? 'text-foreground' : ''}>Complete</span>
-        </div>
+      <div className="grid gap-5">
+      <div className="grid gap-2">
+      <Label htmlFor="company-name" className="text-sm font-semibold">Legal Company Name *</Label>
+      <Input id="company-name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="e.g. Acme Corporation" className="h-10" />
       </div>
+      <div className="grid gap-2">
+      <Label htmlFor="workspace-name" className="text-sm font-semibold">Workspace Title</Label>
+      <Input id="workspace-name" value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} placeholder="e.g. Compliance Solutions" className="h-10" />
+      <p className="text-xs text-muted-foreground">This title appears beneath your logo in the navigation menu.</p>
+      </div>
+      </div>
+      </CardContent>
+      <CardFooter className="px-8 pb-8 pt-4 flex justify-end border-t border-border mt-4 bg-muted/20 rounded-b-xl">
+      <Button size="lg" onClick={handleNextStep} disabled={!companyName.trim()}>
+      Continue <ArrowRight className="ml-2 size-4" />
+      </Button>
+      </CardFooter>
+      </>
+    )}
 
-      <Card className="w-full max-w-2xl shadow-lg border-border/60">
-        
-        {step === 1 && (
-          <>
-            <CardHeader className="text-center pb-8 pt-8">
-              <div className="mx-auto flex size-14 items-center justify-center rounded-full bg-amber-500/10 text-amber-500 mb-4">
-                <LockKeyhole className="size-7" />
-              </div>
-              <CardTitle className="text-2xl">Secure Your Appliance</CardTitle>
-              <CardDescription className="text-base mt-2">
-                You are currently using the factory default credentials. Please change the master password to secure the appliance before continuing.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-6 px-8 sm:px-16">
-              <div className="grid gap-2">
-                <Label htmlFor="new-password">New Master Password</Label>
-                <Input 
-                  id="new-password" 
-                  type="password" 
-                  value={newPassword} 
-                  onChange={(e) => setNewPassword(e.target.value)} 
-                  placeholder="At least 8 characters"
-                  className="h-10"
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="confirm-password">Confirm Password</Label>
-                <Input 
-                  id="confirm-password" 
-                  type="password" 
-                  value={confirmPassword} 
-                  onChange={(e) => setConfirmPassword(e.target.value)} 
-                  placeholder="Type password again"
-                  className="h-10"
-                />
-              </div>
-            </CardContent>
-            <CardFooter className="px-8 pb-8 pt-4 flex justify-end border-t border-border mt-4 bg-muted/20 rounded-b-xl">
-              <Button size="lg" onClick={handleNextStep} disabled={isUpdatingPassword || !newPassword || !confirmPassword || !userId}>
-                {isUpdatingPassword ? "Securing Appliance..." : "Save & Continue"} <ArrowRight className="ml-2 size-4" />
-              </Button>
-            </CardFooter>
-          </>
-        )}
+    {step === 3 && (
+      <>
+      <CardHeader className="text-center pb-6 pt-8">
+      <CardTitle className="text-2xl">Seed your First Framework</CardTitle>
+      <CardDescription className="text-base mt-2">Upload a structured JSON file containing your baseline controls (e.g. SOC 2, PCI-DSS).</CardDescription>
+      </CardHeader>
+      <CardContent className="px-8 pb-8">
+      <FrameworkUploader onImported={() => setTimeout(() => setStep(4), 2000)} />
+      </CardContent>
+      <CardFooter className="px-8 py-4 flex justify-between border-t border-border bg-muted/20 rounded-b-xl">
+      <Button variant="ghost" onClick={() => setStep(2)}>Back</Button>
+      <Button variant="outline" onClick={handleNextStep}>Skip for now <ChevronRight className="ml-1 size-4" /></Button>
+      </CardFooter>
+      </>
+    )}
 
-        {step === 2 && (
-          <>
-            <CardHeader className="text-center pb-8 pt-8">
-              <CardTitle className="text-2xl">Welcome to your GRC Workspace</CardTitle>
-              <CardDescription className="text-base mt-2">Let&apos;s brand this appliance for your organization.</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-8 px-8">
-              <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                <div className="flex size-20 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-muted shadow-inner">
-                  {logoDataUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={logoDataUrl} alt="Company logo" className="size-full object-cover" />
-                  ) : (
-                    <Building2 className="size-8 text-muted-foreground/50" aria-hidden />
-                  )}
-                </div>
-                <div className="flex flex-col gap-2">
-                  <div className="flex flex-wrap gap-2">
-                    <Button type="button" variant="outline" size="sm" className="gap-2" onClick={() => fileInputRef.current?.click()}>
-                      <Upload className="size-4" aria-hidden />
-                      Upload Company Logo
-                    </Button>
-                    {logoDataUrl && (
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setLogoDataUrl(null)}>Remove</Button>
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">Square PNG or SVG recommended. Max 5MB.</p>
-                  <input ref={fileInputRef} type="file" accept="image/*" className="sr-only" onChange={handleLogoChange} />
-                </div>
-              </div>
-
-              <div className="grid gap-5">
-                <div className="grid gap-2">
-                  <Label htmlFor="company-name" className="text-sm font-semibold">Legal Company Name *</Label>
-                  <Input id="company-name" value={companyName} onChange={(e) => setCompanyName(e.target.value)} placeholder="e.g. Acme Corporation" className="h-10" />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="workspace-name" className="text-sm font-semibold">Workspace Title</Label>
-                  <Input id="workspace-name" value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} placeholder="e.g. Compliance Solutions" className="h-10" />
-                  <p className="text-xs text-muted-foreground">This title appears beneath your logo in the navigation menu.</p>
-                </div>
-              </div>
-            </CardContent>
-            <CardFooter className="px-8 pb-8 pt-4 flex justify-end border-t border-border mt-4 bg-muted/20 rounded-b-xl">
-              <Button size="lg" onClick={handleNextStep} disabled={!companyName.trim()}>
-                Continue <ArrowRight className="ml-2 size-4" />
-              </Button>
-            </CardFooter>
-          </>
-        )}
-
-        {step === 3 && (
-          <>
-            <CardHeader className="text-center pb-6 pt-8">
-              <CardTitle className="text-2xl">Seed your First Framework</CardTitle>
-              <CardDescription className="text-base mt-2">Upload a structured JSON file containing your baseline controls (e.g. SOC 2, PCI-DSS).</CardDescription>
-            </CardHeader>
-            <CardContent className="px-8 pb-8">
-              <FrameworkUploader onImported={() => setTimeout(() => setStep(4), 2000)} />
-            </CardContent>
-            <CardFooter className="px-8 py-4 flex justify-between border-t border-border bg-muted/20 rounded-b-xl">
-              <Button variant="ghost" onClick={() => setStep(2)}>Back</Button>
-              <Button variant="outline" onClick={handleNextStep}>Skip for now <ChevronRight className="ml-1 size-4" /></Button>
-            </CardFooter>
-          </>
-        )}
-
-        {step === 4 && (
-          <div className="flex flex-col items-center justify-center py-16 px-8 text-center animate-in fade-in zoom-in duration-500">
-            <div className="size-20 bg-success/15 text-success rounded-full flex items-center justify-center mb-6 ring-8 ring-success/5">
-              <CheckCircle2 className="size-10" />
-            </div>
-            <h2 className="text-3xl font-bold tracking-tight mb-3">Appliance Ready</h2>
-            <p className="text-muted-foreground max-w-md text-base mb-8">
-              Your identity management is secure, your branding is set, and your database is initialized. 
-            </p>
-            <Button size="lg" onClick={onComplete} className="w-full sm:w-auto min-w-[200px] h-12 text-base shadow-lg">
-              Enter Dashboard <ArrowRight className="ml-2 size-5" />
-            </Button>
-          </div>
-        )}
-      </Card>
+    {step === 4 && (
+      <div className="flex flex-col items-center justify-center py-16 px-8 text-center animate-in fade-in zoom-in duration-500">
+      <div className="size-20 bg-success/15 text-success rounded-full flex items-center justify-center mb-6 ring-8 ring-success/5">
+      <CheckCircle2 className="size-10" />
+      </div>
+      <h2 className="text-3xl font-bold tracking-tight mb-3">Appliance Ready</h2>
+      <p className="text-muted-foreground max-w-md text-base mb-8">
+      Your identity management is secure, your branding is set, and your database is initialized.
+      </p>
+      <Button size="lg" onClick={onComplete} className="w-full sm:w-auto min-w-[200px] h-12 text-base shadow-lg">
+      Enter Dashboard <ArrowRight className="ml-2 size-5" />
+      </Button>
+      </div>
+    )}
+    </Card>
     </div>
   )
 }
@@ -7233,6 +7231,7 @@ import { Separator } from "@/components/ui/separator"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import { useOrganization } from "@/lib/organization"
+import { fetchApi } from "@/lib/api"
 
 type ExportStep = "configure" | "generating" | "success"
 type ExportFormat = "pdf" | "json" | "zip"
@@ -7240,23 +7239,23 @@ type ScopeKey = "controls" | "evidence" | "risks" | "logs" | "summary"
 
 const SCOPES: Array<{ id: ScopeKey; label: string; description: string }> = [
   { id: "controls", label: "Control Matrix Status", description: "Control requirements, owners, and current statuses." },
-  { id: "evidence", label: "Supporting Evidence Proofs", description: "Attached proof references and physical evidence files." },
-  { id: "risks", label: "Enterprise Risk Register", description: "Inherent and residual risk profiles mapped to controls." },
-  { id: "logs", label: "Audit Logs", description: "Chronological activity and change history." },
-  { id: "summary", label: "Organization Compliance Summary", description: "High-level posture and framework coverage." },
+{ id: "evidence", label: "Supporting Evidence Proofs", description: "Attached proof references and physical evidence files." },
+{ id: "risks", label: "Enterprise Risk Register", description: "Inherent and residual risk profiles mapped to controls." },
+{ id: "logs", label: "Audit Logs", description: "Chronological activity and change history." },
+{ id: "summary", label: "Organization Compliance Summary", description: "High-level posture and framework coverage." },
 ]
 
 const FORMATS: Array<{ value: ExportFormat; label: string; detail: string; icon: typeof FileText }> = [
   { value: "zip", label: "ZIP Package with Proof Files", detail: "Report and physical attachments", icon: Archive },
-  { value: "json", label: "Structured JSON Framework", detail: "Machine-readable data", icon: FileJson },
-  { value: "pdf", label: "PDF Executive Summary", detail: "Review-ready document", icon: FileText },
+{ value: "json", label: "Structured JSON Framework", detail: "Machine-readable data", icon: FileJson },
+{ value: "pdf", label: "PDF Executive Summary", detail: "Review-ready document", icon: FileText },
 ]
 
 const PROGRESS_MESSAGES = [
   "Validating export scope",
-  "Applying redaction rules",
-  "Packaging compliance records",
-  "Finalizing export package",
+"Applying redaction rules",
+"Packaging compliance records",
+"Finalizing export package",
 ]
 
 export function ThirdPartyAuditExporter() {
@@ -7273,11 +7272,11 @@ export function ThirdPartyAuditExporter() {
   })
   const [format, setFormat] = useState<ExportFormat>("zip")
   const [redact, setRedact] = useState(true)
-  
+
   // File Encryption State
   const [isEncrypted, setIsEncrypted] = useState(false)
   const [filePassword, setFilePassword] = useState("")
-  
+
   const [progress, setProgress] = useState(0)
   const [downloadUrl, setDownloadUrl] = useState<string | null>(null)
   const [downloadFilename, setDownloadFilename] = useState<string>("audit-package.zip")
@@ -7287,18 +7286,18 @@ export function ThirdPartyAuditExporter() {
   useEffect(() => {
     if (step !== "generating") return
 
-    const timer = window.setInterval(() => {
-      setProgress((current) => {
-        const next = Math.min(current + 8, 100)
-        if (next === 100) {
-          window.clearInterval(timer)
-          window.setTimeout(() => setStep("success"), 250)
-        }
-        return next
-      })
-    }, 160)
+      const timer = window.setInterval(() => {
+        setProgress((current) => {
+          const next = Math.min(current + 8, 100)
+          if (next === 100) {
+            window.clearInterval(timer)
+            window.setTimeout(() => setStep("success"), 250)
+          }
+          return next
+        })
+      }, 160)
 
-    return () => window.clearInterval(timer)
+      return () => window.clearInterval(timer)
   }, [step])
 
   function reset() {
@@ -7326,32 +7325,26 @@ export function ThirdPartyAuditExporter() {
     }
 
     if (isEncrypted && format === "pdf" && !filePassword.trim()) {
-      toast.error("Password required", { 
-        description: "Please enter a password to encrypt the PDF document." 
+      toast.error("Password required", {
+        description: "Please enter a password to encrypt the PDF document."
       })
       return
     }
-    
+
     setProgress(4)
     setStep("generating")
 
     try {
-      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-      
-      const payload = { 
-        scope, 
-        format, 
-        redact, 
-        organization,
-        password: (isEncrypted && format === "pdf") ? filePassword.trim() : null
+      const payload = {
+        scope,
+        format,
+          redact,
+          organization,
+          password: (isEncrypted && format === "pdf") ? filePassword.trim() : null
       }
-      
-      const res = await fetch("/api/export/", {
+
+      const res = await fetchApi("export/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Token ${token}`
-        },
         body: JSON.stringify(payload)
       })
 
@@ -7367,7 +7360,7 @@ export function ThirdPartyAuditExporter() {
         }
         throw new Error(errorMsg)
       }
-      
+
       let blob;
       if (format === "zip" || format === "pdf") {
         blob = await res.blob()
@@ -7391,217 +7384,217 @@ export function ThirdPartyAuditExporter() {
 
   function handleDownload() {
     if (!downloadUrl) return
-    const a = document.createElement("a")
-    a.href = downloadUrl
-    a.download = downloadFilename
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    toast.success("Package download started")
+      const a = document.createElement("a")
+      a.href = downloadUrl
+      a.download = downloadFilename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      toast.success("Package download started")
   }
 
   const progressMessage = PROGRESS_MESSAGES[Math.min(Math.floor(progress / 26), 3)]
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogTrigger render={<Button variant="secondary" />}>
-        <ShieldCheck data-icon="inline-start" />
-        Export audit package
-      </DialogTrigger>
-      <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
-        {step === "configure" && (
-          <>
-            <DialogHeader>
-              <div className="flex items-center gap-3 pr-8">
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-                  <LockKeyhole className="size-5" aria-hidden />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <DialogTitle>Third-Party Compliance Export</DialogTitle>
-                  <DialogDescription>
-                    Generate a controlled audit package for an external reviewer.
-                  </DialogDescription>
-                </div>
-              </div>
-            </DialogHeader>
+    <DialogTrigger render={<Button variant="secondary" />}>
+    <ShieldCheck data-icon="inline-start" />
+    Export audit package
+    </DialogTrigger>
+    <DialogContent className="max-h-[calc(100vh-2rem)] overflow-y-auto sm:max-w-2xl">
+    {step === "configure" && (
+      <>
+      <DialogHeader>
+      <div className="flex items-center gap-3 pr-8">
+      <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+      <LockKeyhole className="size-5" aria-hidden />
+      </div>
+      <div className="flex flex-col gap-1">
+      <DialogTitle>Third-Party Compliance Export</DialogTitle>
+      <DialogDescription>
+      Generate a controlled audit package for an external reviewer.
+      </DialogDescription>
+      </div>
+      </div>
+      </DialogHeader>
 
-            <div className="flex flex-col gap-5">
-              <fieldset className="flex flex-col gap-3">
-                <legend className="text-sm font-medium text-foreground">Package scope</legend>
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {SCOPES.map((item) => (
-                    <label
-                      key={item.id}
-                      className={cn(
-                        "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
-                        scope[item.id] ? "border-primary/40 bg-primary/5" : "border-border hover:bg-muted/50",
-                      )}
-                    >
-                      <Checkbox
-                        checked={scope[item.id]}
-                        onCheckedChange={(checked) =>
-                          setScope((current) => ({ ...current, [item.id]: checked }))
-                        }
-                        aria-label={item.label}
-                      />
-                      <span className="flex flex-col gap-1">
-                        <span className="text-sm font-medium text-foreground">{item.label}</span>
-                        <span className="text-xs leading-relaxed text-muted-foreground">{item.description}</span>
-                      </span>
-                    </label>
-                  ))}
-                </div>
-              </fieldset>
-
-              <Separator />
-
-              <div className="flex flex-col gap-2">
-                <label htmlFor="audit-format" className="text-sm font-medium text-foreground">
-                  Export format
-                </label>
-                <Select value={format} onValueChange={(value) => setFormat(value as ExportFormat)}>
-                  <SelectTrigger id="audit-format" className="w-full">
-                    <SelectValue>{FORMATS.find((item) => item.value === format)?.label}</SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {FORMATS.map((item) => {
-                        const Icon = item.icon
-                        return (
-                          <SelectItem key={item.value} value={item.value}>
-                            <Icon aria-hidden />
-                            <span className="flex flex-col">
-                              <span>{item.label}</span>
-                              <span className="text-xs text-muted-foreground">{item.detail}</span>
-                            </span>
-                          </SelectItem>
-                        )
-                      })}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <Separator />
-
-              <fieldset className="flex flex-col gap-4">
-                <legend className="text-sm font-medium text-foreground">Security and redaction</legend>
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex flex-col gap-1">
-                    <label htmlFor="redact-export" className="text-sm font-medium text-foreground">
-                      Redact internal user metadata
-                    </label>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      Remove usernames, internal identifiers, and actor details.
-                    </p>
-                  </div>
-                  <Switch id="redact-export" checked={redact} onCheckedChange={setRedact} />
-                </div>
-                
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex flex-col gap-1">
-                    <label htmlFor="encrypt-export" className={cn("text-sm font-medium", format === "pdf" ? "text-foreground" : "text-muted-foreground")}>
-                      Password-protect PDF
-                    </label>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {format === "pdf" ? "Encrypt the exported PDF file with a password." : "File encryption is only available for PDF exports."}
-                    </p>
-                  </div>
-                  <Switch id="encrypt-export" checked={isEncrypted && format === "pdf"} onCheckedChange={setIsEncrypted} disabled={format !== "pdf"} />
-                </div>
-                
-                {isEncrypted && format === "pdf" && (
-                  <div className="grid gap-2 rounded-lg border border-border bg-muted/30 p-3 animate-in slide-in-from-top-2 fade-in">
-                    <label htmlFor="pdf-password" className="text-sm font-medium text-foreground">Document Password</label>
-                    <Input 
-                      id="pdf-password" 
-                      type="text" 
-                      value={filePassword} 
-                      onChange={(e) => setFilePassword(e.target.value)} 
-                      placeholder="Enter a secure password..."
-                      className="bg-background"
-                    />
-                  </div>
-                )}
-              </fieldset>
-
-              <Alert>
-                <ShieldCheck aria-hidden />
-                <AlertTitle>Secure export controls</AlertTitle>
-                <AlertDescription>
-                  Exports are generated directly from the live database and include verifiable artifacts. Keep exported files secure.
-                </AlertDescription>
-              </Alert>
-            </div>
-
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-              <Button onClick={generatePackage} disabled={selectedCount === 0}>
-                <LockKeyhole data-icon="inline-start" />
-                Generate Audit Package
-              </Button>
-            </DialogFooter>
-          </>
+      <div className="flex flex-col gap-5">
+      <fieldset className="flex flex-col gap-3">
+      <legend className="text-sm font-medium text-foreground">Package scope</legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+      {SCOPES.map((item) => (
+        <label
+        key={item.id}
+        className={cn(
+          "flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors",
+          scope[item.id] ? "border-primary/40 bg-primary/5" : "border-border hover:bg-muted/50",
         )}
+        >
+        <Checkbox
+        checked={scope[item.id]}
+        onCheckedChange={(checked) =>
+          setScope((current) => ({ ...current, [item.id]: checked }))
+        }
+        aria-label={item.label}
+        />
+        <span className="flex flex-col gap-1">
+        <span className="text-sm font-medium text-foreground">{item.label}</span>
+        <span className="text-xs leading-relaxed text-muted-foreground">{item.description}</span>
+        </span>
+        </label>
+      ))}
+      </div>
+      </fieldset>
 
-        {step === "generating" && (
-          <div className="flex min-h-80 flex-col items-center justify-center gap-6 px-4 py-10 text-center">
-            <div className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <LoaderCircle className="size-7 animate-spin" aria-hidden />
-            </div>
-            <DialogHeader className="items-center">
-              <DialogTitle>Generating secure package</DialogTitle>
-              <DialogDescription>
-                Keep this window open while the selected compliance records are prepared.
-              </DialogDescription>
-            </DialogHeader>
-            <Progress value={progress} className="w-full max-w-md">
-              <ProgressLabel>{progressMessage}</ProgressLabel>
-              <ProgressValue>{() => `${progress}%`}</ProgressValue>
-            </Progress>
-            <p className="text-xs text-muted-foreground">Packaging {selectedCount} selected sections</p>
-          </div>
-        )}
+      <Separator />
 
-        {step === "success" && (
-          <div className="flex flex-col gap-6 px-1 py-2">
-            <div className="flex flex-col items-center gap-3 py-2 text-center">
-              <div className="flex size-14 items-center justify-center rounded-full bg-success/15 text-success">
-                <Check className="size-7" aria-hidden />
-              </div>
-              <DialogHeader className="items-center">
-                <DialogTitle>Audit package is ready</DialogTitle>
-                <DialogDescription>
-                  Your compliance data has been securely packaged for download.
-                </DialogDescription>
-              </DialogHeader>
-            </div>
+      <div className="flex flex-col gap-2">
+      <label htmlFor="audit-format" className="text-sm font-medium text-foreground">
+      Export format
+      </label>
+      <Select value={format} onValueChange={(value) => setFormat(value as ExportFormat)}>
+      <SelectTrigger id="audit-format" className="w-full">
+      <SelectValue>{FORMATS.find((item) => item.value === format)?.label}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+      <SelectGroup>
+      {FORMATS.map((item) => {
+        const Icon = item.icon
+        return (
+          <SelectItem key={item.value} value={item.value}>
+          <Icon aria-hidden />
+          <span className="flex flex-col">
+          <span>{item.label}</span>
+          <span className="text-xs text-muted-foreground">{item.detail}</span>
+          </span>
+          </SelectItem>
+        )
+      })}
+      </SelectGroup>
+      </SelectContent>
+      </Select>
+      </div>
 
-            <Alert>
-              <LockKeyhole aria-hidden />
-              <AlertTitle>Export generated successfully</AlertTitle>
-              <AlertDescription>
-                {redact ? "Internal user metadata has been redacted." : "Internal user metadata is included."}
-                {isEncrypted && format === "pdf" && " The PDF is secured with your provided password."}
-              </AlertDescription>
-            </Alert>
+      <Separator />
 
-            <div className="grid gap-2">
-              <Button size="lg" className="w-full" onClick={handleDownload} disabled={!downloadUrl}>
-                <Download className="mr-2 size-5" />
-                {format === "zip" && "Download ZIP Package"}
-                {format === "pdf" && "Download PDF Report"}
-                {format === "json" && "Download JSON Package"}
-              </Button>
-            </div>
+      <fieldset className="flex flex-col gap-4">
+      <legend className="text-sm font-medium text-foreground">Security and redaction</legend>
+      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-1">
+      <label htmlFor="redact-export" className="text-sm font-medium text-foreground">
+      Redact internal user metadata
+      </label>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+      Remove usernames, internal identifiers, and actor details.
+      </p>
+      </div>
+      <Switch id="redact-export" checked={redact} onCheckedChange={setRedact} />
+      </div>
 
-            <DialogFooter className="mt-4 border-none bg-transparent sm:justify-between p-0">
-              <Button variant="ghost" onClick={reset}>Create another export</Button>
-              <Button variant="outline" onClick={() => setOpen(false)}>Done</Button>
-            </DialogFooter>
-          </div>
-        )}
-      </DialogContent>
+      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-1">
+      <label htmlFor="encrypt-export" className={cn("text-sm font-medium", format === "pdf" ? "text-foreground" : "text-muted-foreground")}>
+      Password-protect PDF
+      </label>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+      {format === "pdf" ? "Encrypt the exported PDF file with a password." : "File encryption is only available for PDF exports."}
+      </p>
+      </div>
+      <Switch id="encrypt-export" checked={isEncrypted && format === "pdf"} onCheckedChange={setIsEncrypted} disabled={format !== "pdf"} />
+      </div>
+
+      {isEncrypted && format === "pdf" && (
+        <div className="grid gap-2 rounded-lg border border-border bg-muted/30 p-3 animate-in slide-in-from-top-2 fade-in">
+        <label htmlFor="pdf-password" className="text-sm font-medium text-foreground">Document Password</label>
+        <Input
+        id="pdf-password"
+        type="text"
+        value={filePassword}
+        onChange={(e) => setFilePassword(e.target.value)}
+        placeholder="Enter a secure password..."
+        className="bg-background"
+        />
+        </div>
+      )}
+      </fieldset>
+
+      <Alert>
+      <ShieldCheck aria-hidden />
+      <AlertTitle>Secure export controls</AlertTitle>
+      <AlertDescription>
+      Exports are generated directly from the live database and include verifiable artifacts. Keep exported files secure.
+      </AlertDescription>
+      </Alert>
+      </div>
+
+      <DialogFooter>
+      <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
+      <Button onClick={generatePackage} disabled={selectedCount === 0}>
+      <LockKeyhole data-icon="inline-start" />
+      Generate Audit Package
+      </Button>
+      </DialogFooter>
+      </>
+    )}
+
+    {step === "generating" && (
+      <div className="flex min-h-80 flex-col items-center justify-center gap-6 px-4 py-10 text-center">
+      <div className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+      <LoaderCircle className="size-7 animate-spin" aria-hidden />
+      </div>
+      <DialogHeader className="items-center">
+      <DialogTitle>Generating secure package</DialogTitle>
+      <DialogDescription>
+      Keep this window open while the selected compliance records are prepared.
+      </DialogDescription>
+      </DialogHeader>
+      <Progress value={progress} className="w-full max-w-md">
+      <ProgressLabel>{progressMessage}</ProgressLabel>
+      <ProgressValue>{() => `${progress}%`}</ProgressValue>
+      </Progress>
+      <p className="text-xs text-muted-foreground">Packaging {selectedCount} selected sections</p>
+      </div>
+    )}
+
+    {step === "success" && (
+      <div className="flex flex-col gap-6 px-1 py-2">
+      <div className="flex flex-col items-center gap-3 py-2 text-center">
+      <div className="flex size-14 items-center justify-center rounded-full bg-success/15 text-success">
+      <Check className="size-7" aria-hidden />
+      </div>
+      <DialogHeader className="items-center">
+      <DialogTitle>Audit package is ready</DialogTitle>
+      <DialogDescription>
+      Your compliance data has been securely packaged for download.
+      </DialogDescription>
+      </DialogHeader>
+      </div>
+
+      <Alert>
+      <LockKeyhole aria-hidden />
+      <AlertTitle>Export generated successfully</AlertTitle>
+      <AlertDescription>
+      {redact ? "Internal user metadata has been redacted." : "Internal user metadata is included."}
+      {isEncrypted && format === "pdf" && " The PDF is secured with your provided password."}
+      </AlertDescription>
+      </Alert>
+
+      <div className="grid gap-2">
+      <Button size="lg" className="w-full" onClick={handleDownload} disabled={!downloadUrl}>
+      <Download className="mr-2 size-5" />
+      {format === "zip" && "Download ZIP Package"}
+      {format === "pdf" && "Download PDF Report"}
+      {format === "json" && "Download JSON Package"}
+      </Button>
+      </div>
+
+      <DialogFooter className="mt-4 border-none bg-transparent sm:justify-between p-0">
+      <Button variant="ghost" onClick={reset}>Create another export</Button>
+      <Button variant="outline" onClick={() => setOpen(false)}>Done</Button>
+      </DialogFooter>
+      </div>
+    )}
+    </DialogContent>
     </Dialog>
   )
 }
@@ -7861,6 +7854,7 @@ import {
   CardTitle,
 } from "@/components/ui/card"
 import { initials } from "@/lib/users"
+import { fetchApi } from "@/lib/api"
 
 interface NotificationPref {
   id: string
@@ -7877,54 +7871,51 @@ export function UserProfileSettings() {
   const [isLoading, setIsLoading] = useState(true)
   const [isUpdatingPassword, setIsUpdatingPassword] = useState(false)
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false)
-  
+
   // Real system notifications mapped directly to the backend models
   const [notifications, setNotifications] = useState<NotificationPref[]>([
     { id: "notify_assessments", label: "Assessment Alerts", description: "Notify when assessments are ready for QA or finalized.", enabled: true },
     { id: "notify_tasks", label: "Task Assignments", description: "Notify when remediation tasks are assigned or resolved.", enabled: true },
     { id: "notify_schedules", label: "Audit Schedules", description: "Notify when recurring audits are approaching and evidence is needed.", enabled: false },
   ])
-  
+
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const username = localStorage.getItem("grc_username") || sessionStorage.getItem("grc_username")
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
 
-    fetch("/api/users/", {
-      headers: { "Authorization": `Token ${token}` }
-    })
-      .then(res => res.json())
-      .then(data => {
-        if (Array.isArray(data)) {
-          const currentUser = data.find((u: any) => u.username === username)
-          if (currentUser) {
-            setName(`${currentUser.first_name || ""} ${currentUser.last_name || ""}`.trim() || username || "User")
-            setUserId(String(currentUser.id))
-            setRole(currentUser.role || "Contributor")
-            
-            // Hydrate notification preferences from the DB
-            setNotifications([
-              { id: "notify_assessments", label: "Assessment Alerts", description: "Notify when assessments are ready for QA or finalized.", enabled: currentUser.notify_assessments ?? false },
-              { id: "notify_tasks", label: "Task Assignments", description: "Notify when remediation tasks are assigned or resolved.", enabled: currentUser.notify_tasks ?? false },
-              { id: "notify_schedules", label: "Audit Schedules", description: "Notify when recurring audits are approaching and evidence is needed.", enabled: currentUser.notify_schedules ?? false },
-            ])
+    fetchApi("users/")
+    .then(res => res.json())
+    .then(data => {
+      if (Array.isArray(data)) {
+        const currentUser = data.find((u: any) => u.username === username)
+        if (currentUser) {
+          setName(`${currentUser.first_name || ""} ${currentUser.last_name || ""}`.trim() || username || "User")
+          setUserId(String(currentUser.id))
+          setRole(currentUser.role || "Contributor")
 
-            if (currentUser.avatar) {
-              setAvatarUrl(currentUser.avatar)
-              if (localStorage.getItem("grc_token")) localStorage.setItem("grc_avatar", currentUser.avatar)
+          // Hydrate notification preferences from the DB
+          setNotifications([
+            { id: "notify_assessments", label: "Assessment Alerts", description: "Notify when assessments are ready for QA or finalized.", enabled: currentUser.notify_assessments ?? false },
+            { id: "notify_tasks", label: "Task Assignments", description: "Notify when remediation tasks are assigned or resolved.", enabled: currentUser.notify_tasks ?? false },
+            { id: "notify_schedules", label: "Audit Schedules", description: "Notify when recurring audits are approaching and evidence is needed.", enabled: currentUser.notify_schedules ?? false },
+          ])
+
+          if (currentUser.avatar) {
+            setAvatarUrl(currentUser.avatar)
+            if (localStorage.getItem("grc_token")) localStorage.setItem("grc_avatar", currentUser.avatar)
               if (sessionStorage.getItem("grc_token")) sessionStorage.setItem("grc_avatar", currentUser.avatar)
-            }
           }
-        } else {
-          toast.error("Could not load profile data.")
         }
-      })
-      .catch((err) => {
-        console.error("Fetch error:", err)
-        toast.error("Failed to fetch user profile.")
-      })
-      .finally(() => setIsLoading(false))
+      } else {
+        toast.error("Could not load profile data.")
+      }
+    })
+    .catch((err) => {
+      console.error("Fetch error:", err)
+      toast.error("Failed to fetch user profile.")
+    })
+    .finally(() => setIsLoading(false))
   }, [])
 
   function handleProfileSave(e: React.FormEvent) {
@@ -7936,134 +7927,124 @@ export function UserProfileSettings() {
     const file = e.target.files?.[0]
     if (!file || !userId) return
 
-    if (file.size > 5 * 1024 * 1024) {
-      toast.error("File too large", { description: "Avatars must be 5MB or smaller." })
-      return
-    }
-
-    const objectUrl = URL.createObjectURL(file)
-    setAvatarUrl(objectUrl)
-
-    setIsUploadingAvatar(true)
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    
-    const formData = new FormData()
-    formData.append("avatar", file) 
-
-    try {
-      const response = await fetch(`/api/users/${userId}/`, {
-        method: "PATCH",
-        headers: {
-          "Authorization": `Token ${token}`
-        },
-        body: formData,
-      })
-
-      if (response.ok) {
-        const updatedUser = await response.json()
-        const finalAvatarUrl = updatedUser.avatar || objectUrl
-        
-        setAvatarUrl(finalAvatarUrl)
-        
-        if (localStorage.getItem("grc_token")) localStorage.setItem("grc_avatar", finalAvatarUrl)
-        if (sessionStorage.getItem("grc_token")) sessionStorage.setItem("grc_avatar", finalAvatarUrl)
-        window.dispatchEvent(new Event("avatarUpdated"))
-        
-        toast.success("Avatar updated", { description: "Your profile picture has been changed." })
-      } else {
-        toast.error("Upload failed", { description: "Could not save the avatar to the server." })
+      if (file.size > 5 * 1024 * 1024) {
+        toast.error("File too large", { description: "Avatars must be 5MB or smaller." })
+        return
       }
-    } catch (error) {
-      console.error("Avatar upload error:", error)
-      toast.error("Network error", { description: "Check your connection to the server." })
-    } finally {
-      setIsUploadingAvatar(false)
-      if (fileInputRef.current) fileInputRef.current.value = ""
-    }
+
+      const objectUrl = URL.createObjectURL(file)
+      setAvatarUrl(objectUrl)
+
+      setIsUploadingAvatar(true)
+      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
+
+      const formData = new FormData()
+      formData.append("avatar", file)
+
+        try {
+          // Bypass fetchApi wrapper to allow the browser to auto-set the multipart boundary header
+          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/users/${userId}/`, {
+            method: "PATCH",
+            headers: {
+              "Authorization": `Token ${token}`
+            },
+            body: formData,
+          })
+
+          if (response.ok) {
+            const updatedUser = await response.json()
+            const finalAvatarUrl = updatedUser.avatar || objectUrl
+
+            setAvatarUrl(finalAvatarUrl)
+
+            if (localStorage.getItem("grc_token")) localStorage.setItem("grc_avatar", finalAvatarUrl)
+              if (sessionStorage.getItem("grc_token")) sessionStorage.setItem("grc_avatar", finalAvatarUrl)
+                window.dispatchEvent(new Event("avatarUpdated"))
+
+                toast.success("Avatar updated", { description: "Your profile picture has been changed." })
+          } else {
+            toast.error("Upload failed", { description: "Could not save the avatar to the server." })
+          }
+        } catch (error) {
+          console.error("Avatar upload error:", error)
+          toast.error("Network error", { description: "Check your connection to the server." })
+        } finally {
+          setIsUploadingAvatar(false)
+          if (fileInputRef.current) fileInputRef.current.value = ""
+        }
   }
 
   async function handlePasswordUpdate(e: React.FormEvent) {
     e.preventDefault()
     if (!userId) return
 
-    const form = e.currentTarget as HTMLFormElement
-    const formData = new FormData(form)
-    
-    const newPassword = formData.get("newPassword") as string
-    const confirmPassword = formData.get("confirmPassword") as string
+      const form = e.currentTarget as HTMLFormElement
+      const formData = new FormData(form)
 
-    if (!newPassword || newPassword.length < 8) {
-      toast.error("Invalid password", { description: "Your new password must be at least 8 characters." })
-      return
-    }
+      const newPassword = formData.get("newPassword") as string
+      const confirmPassword = formData.get("confirmPassword") as string
 
-    if (newPassword !== confirmPassword) {
-      toast.error("Passwords do not match", { description: "Ensure both new password fields match exactly." })
-      return
-    }
-
-    setIsUpdatingPassword(true)
-
-    try {
-      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-      
-      const response = await fetch(`/api/users/${userId}/`, {
-        method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Token ${token}`
-        },
-        body: JSON.stringify({
-          password: newPassword
-        }),
-      })
-
-      if (response.ok) {
-        form.reset()
-        toast.success("Password changed", {
-          description: "Use your new password the next time you sign in.",
-        })
-      } else {
-        toast.error("Failed to update password", { description: "You may not have permission to perform this action." })
+      if (!newPassword || newPassword.length < 8) {
+        toast.error("Invalid password", { description: "Your new password must be at least 8 characters." })
+        return
       }
-    } catch (error) {
-      console.error("Network error saving password:", error)
-      toast.error("Network error", { description: "Could not connect to the backend server." })
-    } finally {
-      setIsUpdatingPassword(false)
-    }
+
+      if (newPassword !== confirmPassword) {
+        toast.error("Passwords do not match", { description: "Ensure both new password fields match exactly." })
+        return
+      }
+
+      setIsUpdatingPassword(true)
+
+      try {
+        const response = await fetchApi(`users/${userId}/`, {
+          method: "PATCH",
+          body: JSON.stringify({
+            password: newPassword
+          }),
+        })
+
+        if (response.ok) {
+          form.reset()
+            toast.success("Password changed", {
+              description: "Use your new password the next time you sign in.",
+            })
+        } else {
+          toast.error("Failed to update password", { description: "You may not have permission to perform this action." })
+        }
+      } catch (error) {
+        console.error("Network error saving password:", error)
+        toast.error("Network error", { description: "Could not connect to the backend server." })
+      } finally {
+        setIsUpdatingPassword(false)
+      }
   }
 
   async function toggleNotification(id: string, enabled: boolean) {
     // 1. Optimistic UI update
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, enabled } : n)))
-    
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    if (!token || !userId) return
 
-    try {
-      // 2. Transmit PATCH directly to the DB
-      const res = await fetch(`/api/users/${userId}/`, {
-        method: "PATCH",
-        headers: { 
-          "Authorization": `Token ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ [id]: enabled })
-      })
-      
-      if (res.ok) {
-        const pref = notifications.find((n) => n.id === id)
-        if (pref) toast.success(`${pref.label} ${enabled ? "enabled" : "disabled"}`)
-      } else {
-        // 3. Rollback UI on failure
+    if (!userId) return
+
+      try {
+        // 2. Transmit PATCH directly to the DB
+        const res = await fetchApi(`users/${userId}/`, {
+          method: "PATCH",
+          body: JSON.stringify({ [id]: enabled })
+        })
+
+        if (res.ok) {
+          const pref = notifications.find((n) => n.id === id)
+          if (pref) toast.success(`${pref.label} ${enabled ? "enabled" : "disabled"}`)
+        } else {
+          // 3. Rollback UI on failure
+          setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, enabled: !enabled } : n)))
+          toast.error("Failed to update preference")
+        }
+      } catch (err) {
         setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, enabled: !enabled } : n)))
-        toast.error("Failed to update preference")
+        toast.error("Network error saving preference")
       }
-    } catch (err) {
-      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, enabled: !enabled } : n)))
-      toast.error("Network error saving preference")
-    }
   }
 
   // Determine which toggles to show based on the user's role
@@ -8080,155 +8061,155 @@ export function UserProfileSettings() {
 
   return (
     <div className="grid gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>Profile details</CardTitle>
-          <CardDescription>Update how your name appears across the workspace.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleProfileSave} className="grid gap-6">
-            <div className="flex items-center gap-4">
-              <Avatar size="lg">
-                {avatarUrl && <AvatarImage src={avatarUrl} alt={name} className="object-cover" />}
-                <AvatarFallback>{isLoading ? "..." : initials(name)}</AvatarFallback>
-              </Avatar>
-              <div className="flex flex-col gap-2">
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  onChange={handleAvatarSelect}
-                  accept="image/jpeg, image/png, image/gif, image/webp"
-                  className="sr-only"
-                  aria-label="Upload new avatar"
-                />
-                <Button 
-                  type="button" 
-                  variant="outline" 
-                  size="sm" 
-                  className="gap-2"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={isUploadingAvatar || !userId}
-                >
-                  {isUploadingAvatar ? (
-                    <Loader2 className="size-4 animate-spin" aria-hidden />
-                  ) : (
-                    <Upload className="size-4" aria-hidden />
-                  )}
-                  {isUploadingAvatar ? "Uploading..." : "Change avatar"}
-                </Button>
-                <p className="text-xs text-muted-foreground">JPG, PNG or GIF. Max 5MB.</p>
-              </div>
-            </div>
+    <Card>
+    <CardHeader>
+    <CardTitle>Profile details</CardTitle>
+    <CardDescription>Update how your name appears across the workspace.</CardDescription>
+    </CardHeader>
+    <CardContent>
+    <form onSubmit={handleProfileSave} className="grid gap-6">
+    <div className="flex items-center gap-4">
+    <Avatar size="lg">
+    {avatarUrl && <AvatarImage src={avatarUrl} alt={name} className="object-cover" />}
+    <AvatarFallback>{isLoading ? "..." : initials(name)}</AvatarFallback>
+    </Avatar>
+    <div className="flex flex-col gap-2">
+    <input
+    type="file"
+    ref={fileInputRef}
+    onChange={handleAvatarSelect}
+    accept="image/jpeg, image/png, image/gif, image/webp"
+    className="sr-only"
+    aria-label="Upload new avatar"
+    />
+    <Button
+    type="button"
+    variant="outline"
+    size="sm"
+    className="gap-2"
+    onClick={() => fileInputRef.current?.click()}
+    disabled={isUploadingAvatar || !userId}
+    >
+    {isUploadingAvatar ? (
+      <Loader2 className="size-4 animate-spin" aria-hidden />
+    ) : (
+      <Upload className="size-4" aria-hidden />
+    )}
+    {isUploadingAvatar ? "Uploading..." : "Change avatar"}
+    </Button>
+    <p className="text-xs text-muted-foreground">JPG, PNG or GIF. Max 5MB.</p>
+    </div>
+    </div>
 
-            <div className="grid max-w-xl gap-2">
-              <Label htmlFor="profile-name">Full name</Label>
-              <Input
-                id="profile-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Your name"
-              />
-            </div>
+    <div className="grid max-w-xl gap-2">
+    <Label htmlFor="profile-name">Full name</Label>
+    <Input
+    id="profile-name"
+    value={name}
+    onChange={(e) => setName(e.target.value)}
+    placeholder="Your name"
+    />
+    </div>
 
-            <div className="flex justify-end">
-              <Button type="submit">Save changes</Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+    <div className="flex justify-end">
+    <Button type="submit">Save changes</Button>
+    </div>
+    </form>
+    </CardContent>
+    </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Security</CardTitle>
-          <CardDescription>Manage the password you use to sign in.</CardDescription>
-        </CardHeader>
-        <CardContent className="grid gap-8">
-          <form onSubmit={handlePasswordUpdate} className="grid gap-4">
-            <h3 className="text-sm font-semibold text-card-foreground">Password management</h3>
-            <div className="grid gap-4 sm:grid-cols-3">
-              <div className="grid gap-2">
-                <Label htmlFor="current-password">Current</Label>
-                <Input 
-                  id="current-password" 
-                  name="currentPassword" 
-                  type="password" 
-                  placeholder="••••••••" 
-                  autoComplete="current-password" 
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="new-password">New</Label>
-                <Input 
-                  id="new-password" 
-                  name="newPassword" 
-                  type="password" 
-                  placeholder="••••••••" 
-                  autoComplete="new-password" 
-                />
-              </div>
-              <div className="grid gap-2">
-                <Label htmlFor="confirm-password">Confirm</Label>
-                <Input 
-                  id="confirm-password" 
-                  name="confirmPassword" 
-                  type="password" 
-                  placeholder="••••••••" 
-                  autoComplete="new-password" 
-                />
-              </div>
-            </div>
-            <div className="flex justify-end">
-              <Button type="submit" variant="outline" disabled={isUpdatingPassword || !userId} className="min-w-36">
-                {isUpdatingPassword ? (
-                  <>
-                    <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
-                    Updating...
-                  </>
-                ) : (
-                  "Update password"
-                )}
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+    <Card>
+    <CardHeader>
+    <CardTitle>Security</CardTitle>
+    <CardDescription>Manage the password you use to sign in.</CardDescription>
+    </CardHeader>
+    <CardContent className="grid gap-8">
+    <form onSubmit={handlePasswordUpdate} className="grid gap-4">
+    <h3 className="text-sm font-semibold text-card-foreground">Password management</h3>
+    <div className="grid gap-4 sm:grid-cols-3">
+    <div className="grid gap-2">
+    <Label htmlFor="current-password">Current</Label>
+    <Input
+    id="current-password"
+    name="currentPassword"
+    type="password"
+    placeholder="••••••••"
+    autoComplete="current-password"
+    />
+    </div>
+    <div className="grid gap-2">
+    <Label htmlFor="new-password">New</Label>
+    <Input
+    id="new-password"
+    name="newPassword"
+    type="password"
+    placeholder="••••••••"
+    autoComplete="new-password"
+    />
+    </div>
+    <div className="grid gap-2">
+    <Label htmlFor="confirm-password">Confirm</Label>
+    <Input
+    id="confirm-password"
+    name="confirmPassword"
+    type="password"
+    placeholder="••••••••"
+    autoComplete="new-password"
+    />
+    </div>
+    </div>
+    <div className="flex justify-end">
+    <Button type="submit" variant="outline" disabled={isUpdatingPassword || !userId} className="min-w-36">
+    {isUpdatingPassword ? (
+      <>
+      <Loader2 className="mr-2 size-4 animate-spin" aria-hidden />
+      Updating...
+      </>
+    ) : (
+      "Update password"
+    )}
+    </Button>
+    </div>
+    </form>
+    </CardContent>
+    </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Notifications</CardTitle>
-          <CardDescription>
-            Choose which alerts appear in your in-app notification bell.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {role === "Executive" ? (
-            <p className="text-sm text-muted-foreground bg-muted p-4 rounded-md text-center">
-              Executive accounts do not receive operational alerts.
-            </p>
-          ) : (
-            <ul className="grid gap-1">
-              {visibleNotifications.map((pref, index) => (
-                <li key={pref.id}>
-                  {index > 0 && <Separator className="my-1" />}
-                  <div className="flex items-center justify-between gap-4 py-3">
-                    <div className="min-w-0">
-                      <Label htmlFor={`notif-${pref.id}`} className="text-sm font-medium cursor-pointer">
-                        {pref.label}
-                      </Label>
-                      <p className="text-sm text-muted-foreground text-pretty">{pref.description}</p>
-                    </div>
-                    <Switch
-                      id={`notif-${pref.id}`}
-                      checked={pref.enabled}
-                      onCheckedChange={(checked) => toggleNotification(pref.id, checked)}
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </CardContent>
-      </Card>
+    <Card>
+    <CardHeader>
+    <CardTitle>Notifications</CardTitle>
+    <CardDescription>
+    Choose which alerts appear in your in-app notification bell.
+    </CardDescription>
+    </CardHeader>
+    <CardContent>
+    {role === "Executive" ? (
+      <p className="text-sm text-muted-foreground bg-muted p-4 rounded-md text-center">
+      Executive accounts do not receive operational alerts.
+      </p>
+    ) : (
+      <ul className="grid gap-1">
+      {visibleNotifications.map((pref, index) => (
+        <li key={pref.id}>
+        {index > 0 && <Separator className="my-1" />}
+        <div className="flex items-center justify-between gap-4 py-3">
+        <div className="min-w-0">
+        <Label htmlFor={`notif-${pref.id}`} className="text-sm font-medium cursor-pointer">
+        {pref.label}
+        </Label>
+        <p className="text-sm text-muted-foreground text-pretty">{pref.description}</p>
+        </div>
+        <Switch
+        id={`notif-${pref.id}`}
+        checked={pref.enabled}
+        onCheckedChange={(checked) => toggleNotification(pref.id, checked)}
+        />
+        </div>
+        </li>
+      ))}
+      </ul>
+    )}
+    </CardContent>
+    </Card>
     </div>
   )
 }
@@ -9278,6 +9259,7 @@ export interface ComplianceControl {
 "use client"
 
 import React, { createContext, useContext, useEffect, useState } from "react"
+import { fetchApi } from "@/lib/api"
 
 export type NotificationSeverity = "info" | "success" | "warning" | "critical"
 
@@ -9308,76 +9290,60 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const unreadCount = notifications.filter((n) => !n.read).length
 
   const fetchNotifications = async () => {
+    // Check for token locally to prevent polling 401s when logged out
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
     if (!token) return
-    try {
-      const res = await fetch("/api/notifications/", {
-        headers: { Authorization: `Token ${token}` }
-      })
-      if (res.ok) {
-        const data = await res.json()
-        setNotifications(data.map((n: any) => ({ ...n, id: String(n.id) })))
+
+      try {
+        const res = await fetchApi("notifications/")
+        if (res.ok) {
+          const data = await res.json()
+          setNotifications(data.map((n: any) => ({ ...n, id: String(n.id) })))
+        }
+      } catch (err) {
+        console.error("Failed to fetch notifications", err)
       }
-    } catch (err) {
-      console.error("Failed to fetch notifications", err)
-    }
   }
 
   useEffect(() => {
     fetchNotifications()
-    const interval = setInterval(fetchNotifications, 30000) 
+    const interval = setInterval(fetchNotifications, 30000)
     return () => clearInterval(interval)
   }, [])
 
   const markAsRead = async (id: string) => {
     setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)))
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/${id}/`, {
-      method: "PATCH",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/${id}/`, { method: "PATCH" })
   }
 
   const markAllAsRead = async () => {
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/read/`, {
-      method: "PATCH",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/read/`, { method: "PATCH" })
   }
 
   const removeNotification = async (id: string) => {
     setNotifications((prev) => prev.filter((n) => n.id !== id))
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/${id}/`, {
-      method: "DELETE",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/${id}/`, { method: "DELETE" })
   }
 
   const clearAll = async () => {
     setNotifications([])
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    await fetch(`/api/notifications/read/`, {
-      method: "DELETE",
-      headers: { Authorization: `Token ${token}` }
-    })
+    await fetchApi(`notifications/read/`, { method: "DELETE" })
   }
 
   return (
     <NotificationsContext.Provider
-      value={{
-        notifications,
-        unreadCount,
-        markAsRead,
-        markAllAsRead,
-        removeNotification,
-        clearAll,
-        refreshNotifications: fetchNotifications
-      }}
+    value={{
+      notifications,
+      unreadCount,
+      markAsRead,
+      markAllAsRead,
+      removeNotification,
+      clearAll,
+      refreshNotifications: fetchNotifications
+    }}
     >
-      {children}
+    {children}
     </NotificationsContext.Provider>
   )
 }
@@ -9394,15 +9360,15 @@ export function formatRelativeTime(dateString: string) {
   const date = new Date(dateString)
   const now = new Date()
   const diffInSeconds = Math.floor((now.getTime() - date.getTime()) / 1000)
-  
+
   if (diffInSeconds < 60) return "Just now"
-  const diffInMinutes = Math.floor(diffInSeconds / 60)
-  if (diffInMinutes < 60) return `${diffInMinutes}m ago`
-  const diffInHours = Math.floor(diffInMinutes / 60)
-  if (diffInHours < 24) return `${diffInHours}h ago`
-  const diffInDays = Math.floor(diffInHours / 24)
-  if (diffInDays < 7) return `${diffInDays}d ago`
-  return date.toLocaleDateString()
+    const diffInMinutes = Math.floor(diffInSeconds / 60)
+    if (diffInMinutes < 60) return `${diffInMinutes}m ago`
+      const diffInHours = Math.floor(diffInMinutes / 60)
+      if (diffInHours < 24) return `${diffInHours}h ago`
+        const diffInDays = Math.floor(diffInHours / 24)
+        if (diffInDays < 7) return `${diffInDays}d ago`
+          return date.toLocaleDateString()
 }
 </file>
 

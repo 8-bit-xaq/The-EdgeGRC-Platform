@@ -16,6 +16,7 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.views import APIView
 from django.http import HttpResponse
+from .models import OrganizationSettings
 
 import datetime
 from cryptography.hazmat.primitives import serialization, hashes
@@ -671,3 +672,36 @@ class HTTPSConfigurationView(APIView):
         # The Systemd watcher automatically detects this file change and reloads Nginx.
 
         return Response({"status": "HTTPS successfully enabled on the appliance."})
+
+class OrganizationSettingsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        obj, _ = OrganizationSettings.objects.get_or_create(pk=1)
+        return Response({
+            'company_name': obj.company_name,
+            'workspace_name': obj.workspace_name,
+            'logo_data_url': obj.logo_data_url
+        })
+
+    def put(self, request):
+        # Only Admins can change the branding
+        if getattr(request.user.profile, 'role', '') != 'Admin':
+            return Response({"error": "Only Admins can update branding."}, status=status.HTTP_403_FORBIDDEN)
+            
+        obj, _ = OrganizationSettings.objects.get_or_create(pk=1)
+        
+        if 'company_name' in request.data:
+            obj.company_name = request.data['company_name']
+        if 'workspace_name' in request.data:
+            obj.workspace_name = request.data['workspace_name']
+        if 'logo_data_url' in request.data:
+            obj.logo_data_url = request.data['logo_data_url']
+            
+        obj.save()
+        
+        return Response({
+            'company_name': obj.company_name,
+            'workspace_name': obj.workspace_name,
+            'logo_data_url': obj.logo_data_url
+        })
