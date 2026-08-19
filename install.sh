@@ -91,6 +91,16 @@ systemctl enable --now grc-backend
 systemctl enable --now grc-frontend
 systemctl enable --now grc-ssl-watcher.path
 
+# --- ADD THIS NEW SECURITY BLOCK ---
+echo "Configuring strict least-privilege update permissions..."
+cat <<EOF > /etc/sudoers.d/grc-updater
+www-data ALL=(root) NOPASSWD: /bin/systemctl restart grc-backend, /bin/systemctl restart grc-frontend
+EOF
+
+# Sudoers files will be ignored if permissions are too open
+chmod 0440 /etc/sudoers.d/grc-updater
+# -----------------------------------
+
 # 6. Configure Nginx Reverse Proxy
 echo "[6/6] Configuring Nginx web server..."
 rm -f /etc/nginx/sites-enabled/default

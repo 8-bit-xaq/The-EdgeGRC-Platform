@@ -539,7 +539,7 @@ def execute_system_update(zip_path, base_dir):
         if os.path.exists(manage_path):
             subprocess.run([sys.executable, manage_path, 'migrate'], cwd=backend_dir, check=True)
             
-        subprocess.run(['sudo', 'systemctl', 'restart', 'grc-backends', 'grc-frontend'], check=True)
+        subprocess.run(['sudo', 'systemctl', 'restart', 'grc-backend', 'grc-frontend'], check=True)
         
     except Exception as e:
         print(f"CRITICAL: System update failed: {e}")
