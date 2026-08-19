@@ -11,9 +11,9 @@ export interface Organization {
 }
 
 export const DEFAULT_ORGANIZATION: Organization = {
-  companyName: "ByteTex",
-  domain: "bytetex.com",
-  workspaceName: "Compliance Solutions",
+  companyName: "Edge GRC",
+  domain: "edgegrc.com",
+  workspaceName: "The Edge GRC Platform",
   logoDataUrl: null,
 }
 

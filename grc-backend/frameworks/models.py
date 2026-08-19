@@ -447,7 +447,7 @@ auditlog.register(TestPlan)
 auditlog.register(AssessmentActivity)
 
 class OrganizationSettings(models.Model):
-    company_name = models.CharField(max_length=255, default="ByteTex")
+    company_name = models.CharField(max_length=255, default="Edge GRC")
     workspace_name = models.CharField(max_length=255, default="Compliance Solutions")
     logo_data_url = models.TextField(blank=True, null=True)
 

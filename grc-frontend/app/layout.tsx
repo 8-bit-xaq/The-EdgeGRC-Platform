@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'ByteTex Compliance Solutions',
+  title: 'Edge GRC',
   description:
     'Governance, Risk & Compliance platform for importing frameworks and managing compliance controls.',
   generator: 'v0.app',

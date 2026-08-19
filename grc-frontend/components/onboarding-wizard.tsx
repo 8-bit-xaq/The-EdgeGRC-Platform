@@ -151,7 +151,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
     <ShieldCheck className="size-6" aria-hidden />
     </div>
     <div>
-    <h1 className="text-xl font-bold tracking-tight">ByteTex Appliance Setup</h1>
+    <h1 className="text-xl font-bold tracking-tight">Edge GRC Appliance Setup</h1>
     <p className="text-sm text-muted-foreground font-medium">Out-of-the-box Configuration</p>
     </div>
     </div>

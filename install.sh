@@ -45,7 +45,7 @@ echo "Generating initial self-signed certificates..."
 openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
   -keyout $SSL_DIR/appliance_key.pem \
   -out $SSL_DIR/appliance_cert.pem \
-  -subj "/C=US/ST=South Dakota/L=Sioux Falls/O=ByteTex/CN=edge-grc.local"
+  -subj "/C=US/ST=South Dakota/L=Sioux Falls/O=EdgeGRC/CN=edge-grc.local"
 
 # 4. Configure the Python Backend
 echo "[4/6] Configuring Django backend..."
