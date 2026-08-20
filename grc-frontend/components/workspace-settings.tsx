@@ -263,8 +263,12 @@ export function WorkspaceSettings() {
     formData.append("file", restoreFile)
 
     try {
-      const res = await fetchApi("restore/", {
+      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
+      const res = await fetch("/api/restore/", {
         method: "POST",
+        headers: {
+          "Authorization": `Token ${token}`
+        },
         body: formData,
       })
 
