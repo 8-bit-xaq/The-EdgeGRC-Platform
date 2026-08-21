@@ -276,7 +276,7 @@ class ExportAuditPackageView(APIView):
         export_password = request.data.get('password')
         
         org_data = request.data.get('organization', {})
-        company_name = org_data.get('companyName', 'ByteTex')
+        company_name = org_data.get('companyName', 'Edge GRC')
         workspace_name = org_data.get('workspaceName', 'Compliance Solutions')
         logo_data_url = org_data.get('logoDataUrl')
 

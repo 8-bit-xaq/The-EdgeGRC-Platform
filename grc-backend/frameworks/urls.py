@@ -22,7 +22,8 @@ from .views import (
     NotificationUpdateView,
     SystemUpdateView,
     HTTPSConfigurationView,
-    OrganizationSettingsView
+    OrganizationSettingsView,
+    FactoryResetView
 )
 
 urlpatterns = [
@@ -53,4 +54,5 @@ urlpatterns = [
     path('update/', SystemUpdateView.as_view()),
     path('system/https-config/', HTTPSConfigurationView.as_view(), name='https-config'),
     path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
+    path('factory-reset/', FactoryResetView.as_view(), name='factory-reset'),
 ]

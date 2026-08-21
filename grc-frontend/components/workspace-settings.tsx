@@ -102,6 +102,12 @@ export function WorkspaceSettings() {
   const [isGeneratingSSL, setIsGeneratingSSL] = useState(false)
   const [isDownloadingCert, setIsDownloadingCert] = useState(false)
 
+  // Allow and confirm deletion
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteUsername, setDeleteUsername] = useState("")
+  const [deletePassword, setDeletePassword] = useState("")
+  const [isDeleting, setIsDeleting] = useState(false)
+
   // Sync local form inputs when the global context loads from storage
   useEffect(() => {
     setCompanyName(organization.companyName)
@@ -214,9 +220,48 @@ export function WorkspaceSettings() {
   }
 
   function handleDeleteWorkspace() {
-    toast.error("Workspace deletion requested", {
-      description: "An owner must confirm this irreversible action via email.",
-    })
+    setShowDeleteConfirm(true)
+  }
+
+  async function executeDeleteWorkspace() {
+    const currentUsername = localStorage.getItem("grc_username") || sessionStorage.getItem("grc_username")
+    
+    if (deleteUsername !== currentUsername) {
+      toast.error("Invalid username", { description: "The username entered does not match your active account." })
+      return
+    }
+
+    if (!deletePassword) {
+      toast.error("Password required", { description: "Please enter your password to confirm." })
+      return
+    }
+
+    setIsDeleting(true)
+    try {
+      const res = await fetchApi("factory-reset/", {
+        method: "POST",
+        body: JSON.stringify({ password: deletePassword })
+      })
+
+      if (res.ok) {
+        toast.success("Workspace Deleted", { description: "The appliance has been reset to factory defaults. Reloading..." })
+        setTimeout(() => {
+          localStorage.removeItem('grc_token')
+          sessionStorage.removeItem('grc_token')
+          window.location.reload()
+        }, 2000)
+      } else {
+        const err = await res.json()
+        toast.error("Reset Failed", { description: err.error || "Authentication failed." })
+      }
+    } catch (err) {
+      toast.error("Network Error", { description: "Could not connect to the backend server." })
+    } finally {
+      setIsDeleting(false)
+      setShowDeleteConfirm(false)
+      setDeleteUsername("")
+      setDeletePassword("")
+    }
   }
 
   async function handleBackup() {
@@ -776,6 +821,57 @@ export function WorkspaceSettings() {
             </Button>
             <Button variant="destructive" onClick={executeRestore} disabled={isRestoring}>
               {isRestoring ? <><Loader2 className="mr-2 size-4 animate-spin" /> Restoring...</> : "Yes, Restore System"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirmation Dialog for Workspace Deletion */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <ShieldCheck className="size-5" /> Confirm Workspace Deletion
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground mt-2">
+              This action is permanent and irreversible. All controls, risks, assessments, and evidence files will be wiped from the database.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="delete-username">Confirm your Username</Label>
+              <Input
+                id="delete-username"
+                value={deleteUsername}
+                onChange={(e) => setDeleteUsername(e.target.value)}
+                placeholder="Enter your username"
+                disabled={isDeleting}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="delete-password">Confirm your Password</Label>
+              <Input
+                id="delete-password"
+                type="password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+                placeholder="Enter your password"
+                disabled={isDeleting}
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => {
+              setShowDeleteConfirm(false);
+              setDeleteUsername("");
+              setDeletePassword("");
+            }} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={executeDeleteWorkspace} disabled={isDeleting}>
+              {isDeleting ? <><Loader2 className="mr-2 size-4 animate-spin" /> Purging...</> : "Permanently Delete Workspace"}
             </Button>
           </DialogFooter>
         </DialogContent>
