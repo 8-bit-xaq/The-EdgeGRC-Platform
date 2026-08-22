@@ -605,11 +605,8 @@ class FactoryResetView(APIView):
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+
 class HTTPSConfigurationView(APIView):
-    """
-    Manages local HTTPS configuration. Generates certs to disk and reloads Nginx,
-    or serves the public certificate for local machine trust.
-    """
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
@@ -630,14 +627,29 @@ class HTTPSConfigurationView(APIView):
         if getattr(request.user.profile, 'role', '') != 'Admin':
             return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
 
+        # Extract values submitted from the frontend dialog
+        common_name = request.data.get('common_name', 'edge-grc.local')
+        org_name = request.data.get('organization', 'Edge-GRC Appliance')
+        country = request.data.get('country', 'US')
+        state = request.data.get('state', '')
+        locality = request.data.get('locality', '')
+
         # 1. Generate Cryptographic Assets
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        common_name = request.data.get('common_name', 'edge-grc.local')
         
-        subject = issuer = x509.Name([
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, u"Edge-GRC Appliance"),
+        # Build the dynamic X.509 Subject Name block
+        attributes = [
             x509.NameAttribute(NameOID.COMMON_NAME, common_name),
-        ])
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_name),
+        ]
+        if country: 
+            attributes.append(x509.NameAttribute(NameOID.COUNTRY_NAME, country))
+        if state: 
+            attributes.append(x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, state))
+        if locality: 
+            attributes.append(x509.NameAttribute(NameOID.LOCALITY_NAME, locality))
+
+        subject = issuer = x509.Name(attributes)
 
         cert = x509.CertificateBuilder().subject_name(
             subject
@@ -660,18 +672,75 @@ class HTTPSConfigurationView(APIView):
             encryption_algorithm=serialization.NoEncryption()
         )
 
-        # 2. Write to the Host Filesystem
+        # 2. Rewrite the Nginx Configuration File
+        nginx_conf_path = os.path.join(settings.BASE_DIR, 'configs', 'nginx.conf')
+        
+        https_nginx_config = f"""server {{
+    listen 80;
+    server_name {common_name};
+    
+    # Force HTTP to redirect to HTTPS
+    return 301 https://$host$request_uri;
+}}
+
+server {{
+    listen 443 ssl;
+    server_name {common_name};
+
+    # Allow large payloads for system updates and database restores
+    client_max_body_size 500M;
+
+    ssl_certificate /opt/grc-appliance/grc-backend/configs/ssl/appliance_cert.pem;
+    ssl_certificate_key /opt/grc-appliance/grc-backend/configs/ssl/appliance_key.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    location /api/ {{
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        
+        # Increase timeouts to prevent 504 errors while Django processes 
+        # large background tasks (e.g., extracting zips, running migrations)
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+    }}
+    
+    location /media/ {{
+        alias /opt/grc-appliance/grc-backend/media/;
+    }}
+
+    location / {{
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+}}
+"""
+        with open(nginx_conf_path, 'w') as f:
+            f.write(https_nginx_config)
+
+        # 3. Write Certificates to disk
         ssl_dir = os.path.join(settings.BASE_DIR, 'configs', 'ssl')
         os.makedirs(ssl_dir, exist_ok=True)
 
-        with open(os.path.join(ssl_dir, 'appliance_cert.pem'), 'wb') as f:
-            f.write(cert_pem)
         with open(os.path.join(ssl_dir, 'appliance_key.pem'), 'wb') as f:
             f.write(key_pem)
+            
+        # Write the public cert LAST. This file modification triggers the Systemd 
+        # 'grc-ssl-watcher.path' to execute 'systemctl reload nginx' immediately.
+        with open(os.path.join(ssl_dir, 'appliance_cert.pem'), 'wb') as f:
+            f.write(cert_pem)
 
-        # The Systemd watcher automatically detects this file change and reloads Nginx.
+        return Response({"status": "HTTPS successfully enabled. Nginx reloading."})
 
-        return Response({"status": "HTTPS successfully enabled on the appliance."})
 
 class OrganizationSettingsView(APIView):
     permission_classes = [IsAuthenticated]

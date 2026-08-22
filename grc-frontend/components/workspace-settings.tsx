@@ -102,6 +102,14 @@ export function WorkspaceSettings() {
   const [isGeneratingSSL, setIsGeneratingSSL] = useState(false)
   const [isDownloadingCert, setIsDownloadingCert] = useState(false)
 
+  // SSL Certificate Form State
+  const [showSslDialog, setShowSslDialog] = useState(false)
+  const [sslCommonName, setSslCommonName] = useState("")
+  const [sslOrganization, setSslOrganization] = useState("")
+  const [sslCountry, setSslCountry] = useState("US")
+  const [sslState, setSslState] = useState("")
+  const [sslLocality, setSslLocality] = useState("")
+
   // Allow and confirm deletion
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleteUsername, setDeleteUsername] = useState("")
@@ -378,9 +386,21 @@ export function WorkspaceSettings() {
     }
   } 
 
-  async function handleEnableHTTPS(checked: boolean) {
+  function handleEnableHTTPS(checked: boolean) {
     if (!checked) {
       toast.info("HTTPS cannot be disabled via the UI for security reasons.")
+      return
+    }
+    
+    // Pre-fill sensible defaults for the user
+    setSslCommonName(window.location.hostname || "edge-grc.local")
+    setSslOrganization(organization.companyName || "Edge GRC")
+    setShowSslDialog(true)
+  }
+
+  async function executeEnableHTTPS() {
+    if (!sslCommonName) {
+      toast.error("Common Name required", { description: "You must provide the domain or IP for the certificate." })
       return
     }
 
@@ -388,13 +408,20 @@ export function WorkspaceSettings() {
     try {
       const res = await fetchApi("system/https-config/", {
         method: "POST",
-        body: JSON.stringify({ common_name: window.location.hostname || "edge-grc.local" }),
+        body: JSON.stringify({ 
+          common_name: sslCommonName,
+          organization: sslOrganization,
+          country: sslCountry,
+          state: sslState,
+          locality: sslLocality
+        }),
       })
 
       if (!res.ok) throw new Error("Failed to configure HTTPS")
 
       toast.success("HTTPS Enabled", { description: "Nginx reloaded. The page will refresh securely in 3 seconds." })
       setIsHttpsEnabled(true)
+      setShowSslDialog(false)
       
       setTimeout(() => {
         window.location.href = `https://${window.location.host}${window.location.pathname}`
@@ -821,6 +848,89 @@ export function WorkspaceSettings() {
             </Button>
             <Button variant="destructive" onClick={executeRestore} disabled={isRestoring}>
               {isRestoring ? <><Loader2 className="mr-2 size-4 animate-spin" /> Restoring...</> : "Yes, Restore System"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* SSL Configuration Dialog */}
+      <Dialog open={showSslDialog} onOpenChange={setShowSslDialog}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <KeyRound className="size-5 text-primary" /> Configure HTTPS Certificate
+            </DialogTitle>
+            <DialogDescription className="mt-2">
+              Please provide the details for the self-signed X.509 certificate. 
+              This information will be embedded in the public key you download for trust.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="ssl-common-name">Domain or IP (Common Name) *</Label>
+              <Input
+                id="ssl-common-name"
+                value={sslCommonName}
+                onChange={(e) => setSslCommonName(e.target.value)}
+                placeholder="e.g. edge-grc.local or 192.168.1.100"
+                disabled={isGeneratingSSL}
+              />
+            </div>
+            
+            <div className="grid gap-2">
+              <Label htmlFor="ssl-org">Organization</Label>
+              <Input
+                id="ssl-org"
+                value={sslOrganization}
+                onChange={(e) => setSslOrganization(e.target.value)}
+                placeholder="e.g. Acme Corp"
+                disabled={isGeneratingSSL}
+              />
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="grid gap-2 col-span-1">
+                <Label htmlFor="ssl-country">Country</Label>
+                <Input
+                  id="ssl-country"
+                  value={sslCountry}
+                  onChange={(e) => setSslCountry(e.target.value)}
+                  placeholder="US"
+                  maxLength={2}
+                  disabled={isGeneratingSSL}
+                />
+              </div>
+              <div className="grid gap-2 col-span-2">
+                <Label htmlFor="ssl-state">State / Province</Label>
+                <Input
+                  id="ssl-state"
+                  value={sslState}
+                  onChange={(e) => setSslState(e.target.value)}
+                  placeholder="e.g. California"
+                  disabled={isGeneratingSSL}
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="ssl-locality">City / Locality</Label>
+              <Input
+                id="ssl-locality"
+                value={sslLocality}
+                onChange={(e) => setSslLocality(e.target.value)}
+                placeholder="e.g. San Francisco"
+                disabled={isGeneratingSSL}
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setShowSslDialog(false)} disabled={isGeneratingSSL}>
+              Cancel
+            </Button>
+            <Button onClick={executeEnableHTTPS} disabled={isGeneratingSSL}>
+              {isGeneratingSSL ? <><Loader2 className="mr-2 size-4 animate-spin" /> Generating...</> : "Generate & Enable HTTPS"}
             </Button>
           </DialogFooter>
         </DialogContent>
