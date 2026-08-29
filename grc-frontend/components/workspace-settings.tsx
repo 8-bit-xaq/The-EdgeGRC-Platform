@@ -83,7 +83,7 @@ export function WorkspaceSettings() {
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(organization.logoDataUrl)
 
   // Security & Backup draft state
-  const [sessionTimeout, setSessionTimeout] = useState("30 minutes")
+  const [sessionTimeout, setSessionTimeout] = useState("4 hours") // Default fallback
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [saving, setSaving] = useState(false)
   const [isLoadingSessions, setIsLoadingSessions] = useState(false)
@@ -115,6 +115,25 @@ export function WorkspaceSettings() {
   const [deleteUsername, setDeleteUsername] = useState("")
   const [deletePassword, setDeletePassword] = useState("")
   const [isDeleting, setIsDeleting] = useState(false)
+
+  // Fetch initial organization settings and session timeout from API on mount
+  useEffect(() => {
+    fetchApi("organization/")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.session_timeout) {
+          // Convert database minutes back to UI string
+          const mins = data.session_timeout
+          if (mins === 15) setSessionTimeout("15 minutes")
+          else if (mins === 30) setSessionTimeout("30 minutes")
+          else if (mins === 60) setSessionTimeout("1 hour")
+          else if (mins === 240) setSessionTimeout("4 hours")
+          else if (mins === 480) setSessionTimeout("8 hours")
+          else setSessionTimeout(`${mins} minutes`)
+        }
+      })
+      .catch((err) => console.error("Failed to fetch org settings:", err))
+  }, [])
 
   // Sync local form inputs when the global context loads from storage
   useEffect(() => {
@@ -212,19 +231,47 @@ export function WorkspaceSettings() {
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     setSaving(true)
-    setTimeout(() => {
+    
+    // Convert UI string to integer minutes for the database
+    let timeoutMinutes = 240
+    if (sessionTimeout === "15 minutes") timeoutMinutes = 15
+    if (sessionTimeout === "30 minutes") timeoutMinutes = 30
+    if (sessionTimeout === "1 hour") timeoutMinutes = 60
+    if (sessionTimeout === "4 hours") timeoutMinutes = 240
+    if (sessionTimeout === "8 hours") timeoutMinutes = 480
+
+    try {
+      const response = await fetchApi("organization/", {
+        method: "PUT",
+        body: JSON.stringify({
+          company_name: companyName.trim() || organization.companyName,
+          workspace_name: workspaceName.trim() || organization.workspaceName,
+          logo_data_url: logoDataUrl,
+          session_timeout: timeoutMinutes
+        }),
+      })
+
+      if (!response.ok) throw new Error("Failed to save organization settings")
+
+      // Update the frontend context so the navbar and UI update instantly
       updateOrganization({
         companyName: companyName.trim() || organization.companyName,
         workspaceName: workspaceName.trim() || organization.workspaceName,
         logoDataUrl,
       })
-      setSaving(false)
+
       toast.success("Changes saved", {
         description: "Your workspace settings have been updated.",
       })
-    }, 800)
+    } catch (error) {
+      toast.error("Save failed", {
+        description: "Could not update settings. Please check your permissions.",
+      })
+    } finally {
+      setSaving(false)
+    }
   }
 
   function handleDeleteWorkspace() {

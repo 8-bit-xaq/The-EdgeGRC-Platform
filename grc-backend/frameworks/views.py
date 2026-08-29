@@ -812,7 +812,8 @@ class OrganizationSettingsView(APIView):
         return Response({
             'company_name': obj.company_name,
             'workspace_name': obj.workspace_name,
-            'logo_data_url': obj.logo_data_url
+            'logo_data_url': obj.logo_data_url,
+            'session_timeout': obj.session_timeout
         })
 
     def put(self, request):
@@ -828,11 +829,14 @@ class OrganizationSettingsView(APIView):
             obj.workspace_name = request.data['workspace_name']
         if 'logo_data_url' in request.data:
             obj.logo_data_url = request.data['logo_data_url']
+        if 'session_timeout' in request.data:
+            obj.session_timeout = int(request.data['session_timeout'])
             
         obj.save()
         
         return Response({
             'company_name': obj.company_name,
             'workspace_name': obj.workspace_name,
-            'logo_data_url': obj.logo_data_url
+            'logo_data_url': obj.logo_data_url,
+            'session_timeout': obj.session_timeout
         })

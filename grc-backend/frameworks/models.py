@@ -481,6 +481,7 @@ class OrganizationSettings(models.Model):
     company_name = models.CharField(max_length=255, default="Edge GRC")
     workspace_name = models.CharField(max_length=255, default="Compliance Solutions")
     logo_data_url = models.TextField(blank=True, null=True)
+    session_timeout = models.IntegerField(default=240)
 
     def save(self, *args, **kwargs):
         # Force the ID to always be 1 so it acts as a global singleton

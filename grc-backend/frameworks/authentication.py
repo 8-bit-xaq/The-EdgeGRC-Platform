@@ -2,7 +2,7 @@ import datetime
 from django.utils import timezone
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.exceptions import AuthenticationFailed
-from frameworks.models import ActiveSession
+from frameworks.models import ActiveSession, OrganizationSettings
 
 class ExpiringTokenAuthentication(TokenAuthentication):
     """
@@ -41,7 +41,14 @@ class ExpiringTokenAuthentication(TokenAuthentication):
             raise AuthenticationFailed('Invalid session.')
 
         now = timezone.now()
-        timeout = datetime.timedelta(hours=4)
+        
+        try:
+            org_settings = OrganizationSettings.objects.get(pk=1)
+            timeout_minutes = org_settings.session_timeout
+        except OrganizationSettings.DoesNotExist:
+            timeout_minutes = 240 # Fallback to 4 hours
+
+        timeout = datetime.timedelta(minutes=timeout_minutes)
 
         if now > session.last_active + timeout:
             token.delete()
