@@ -10,22 +10,30 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
+import secrets
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# --- APPLIANCE SECURITY FIXES ---
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+# 1. Dynamically Generate and Persist the Secret Key
+# This ensures every installed appliance gets a unique cryptographic signature.
+secret_file = BASE_DIR / 'configs' / 'django_secret.txt'
+if not secret_file.exists():
+    secret_file.parent.mkdir(parents=True, exist_ok=True)
+    secret_file.write_text(secrets.token_urlsafe(50))
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-&$jef*g+o%c@m*z^m(j$d(33*lvyd!+)s%*1#6nc_fgbg7oc90'
+SECRET_KEY = secret_file.read_text().strip()
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+# 2. Disable Debug Mode for Production
+DEBUG = os.environ.get('DJANGO_DEBUG', 'False') == 'True'
 
-ALLOWED_HOSTS = ['*']
+# 3. Restrict Allowed Hosts
+# Because Nginx handles the reverse proxying locally on the appliance, we can accept localhost.
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '*']
 
 
 # Application definition
@@ -118,16 +126,12 @@ USE_I18N = True
 
 USE_TZ = True
 
-CORS_ALLOW_ALL_ORIGINS = True
-
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-
-import os
 
 # The URL path to access uploaded files
 MEDIA_URL = '/media/'
@@ -137,15 +141,14 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
+        # Point to the new authentication.py file instead of views.py
+        'frameworks.authentication.ExpiringTokenAuthentication',
     ],
-    # Optional: If you want to force users to be logged in to see anything, uncomment this:
-    # 'DEFAULT_PERMISSION_CLASSES': [
-    #     'rest_framework.permissions.IsAuthenticated',
-    # ]
 }
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://192.168.200.97:3000",
 ]
+
+CORS_ALLOW_CREDENTIALS = True

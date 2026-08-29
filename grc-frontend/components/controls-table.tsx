@@ -28,9 +28,13 @@ import {
   type ControlStatus,
   type EffectivenessStatus,
 } from "@/lib/controls"
-import { fetchApi } from "@/lib/api" // <-- NEW: API Wrapper
+import { fetchApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+
+// --- NEW: React Query Imports ---
+import { useControls } from "@/hooks/use-grc-data"
+import { useQueryClient } from "@tanstack/react-query"
 
 type StatusFilter = "All" | ControlStatus
 
@@ -67,42 +71,20 @@ function StatusBadge({ status }: { status: ControlStatus }) {
 }
 
 export function ControlsTable({ targetControlId, onClearTarget, targetFilter, onClearFilter }: ControlsTableProps = {}) {
-  const [controls, setControls] = useState<ComplianceControl[]>([])
+  // Connect to the global cache
+  const { data: controls = [], isLoading } = useControls()
+  const queryClient = useQueryClient()
+
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All")
   const [designFilter, setDesignFilter] = useState<"All" | EffectivenessStatus>("All")
   const [operatingFilter, setOperatingFilter] = useState<"All" | EffectivenessStatus>("All")
   const [editing, setEditing] = useState<ComplianceControl | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
   const [role, setRole] = useState<string | null>(null)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
-  const fetchControls = () => {
-    fetchApi("controls/")
-      .then((res) => {
-        if (!res.ok) throw new Error(`API Error: ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        if (!Array.isArray(data)) return;
-        const formattedData = data.map((item: any) => ({
-          ...item,
-          id: item.control_id 
-        }));
-        setControls(formattedData);
-      })
-      .catch((err) => {
-        console.error("Failed to fetch controls:", err);
-        if (err.message !== "Session expired or user inactive") {
-          toast.error("Could not load controls. Check your connection or permissions.");
-        }
-      })
-      .finally(() => setIsLoading(false));
-  };
-
   useEffect(() => {
     setRole(localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role"));
-    fetchControls();
   }, []);
 
   useEffect(() => {
@@ -191,7 +173,6 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             if (proof.file) { 
               const formData = new FormData();
               formData.append('file', proof.file);
-              // Fallback to standard fetch with manual token just for FormData to prevent Content-Type conflicts
               const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token");
               const uploadRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/controls/${updated.id}/proofs/`, {
                 method: "POST",
@@ -202,7 +183,9 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             }
           }
         }
-        fetchControls();
+        
+        // --- NEW: Invalidate the global cache so all components refresh instantly ---
+        queryClient.invalidateQueries({ queryKey: ["controls"] })
         setEditing(null);
       } else {
         toast.error("Failed to save changes. You may not have permission.");
@@ -495,7 +478,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
         onSave={handleSave}
-        onRefresh={fetchControls}
+        onRefresh={() => queryClient.invalidateQueries({ queryKey: ["controls"] })}
         userRole={role}
       />
     </section>

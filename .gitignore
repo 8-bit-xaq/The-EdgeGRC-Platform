@@ -31,6 +31,7 @@ media/
 # --- Appliance Specifics ---
 # Ignores downloaded system upgrade packages
 updates/
+staticfiles/
 # Ignores generated local X.509 HTTPS certificates
 configs/ssl/*.pem
 

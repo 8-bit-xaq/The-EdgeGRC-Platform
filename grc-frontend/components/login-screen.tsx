@@ -42,7 +42,8 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
     try {
       const response = await fetchApi("login/", {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        // WE ADDED remember_me HERE:
+        body: JSON.stringify({ username, password, remember_me: rememberMe }),
       })
 
       if (response.ok) {
@@ -54,13 +55,12 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
           sessionStorage.removeItem(k)
         })
         
+        // We no longer store data.token anywhere. The browser holds the cookie securely.
         if (rememberMe) {
-          localStorage.setItem("grc_token", data.token)
           localStorage.setItem("grc_username", username)
           localStorage.setItem("grc_role", data.role) 
           if (data.avatar) localStorage.setItem("grc_avatar", data.avatar) 
         } else {
-          sessionStorage.setItem("grc_token", data.token)
           sessionStorage.setItem("grc_username", username)
           sessionStorage.setItem("grc_role", data.role) 
           if (data.avatar) sessionStorage.setItem("grc_avatar", data.avatar) 

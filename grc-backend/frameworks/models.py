@@ -5,6 +5,28 @@ from django.dispatch import receiver
 from auditlog.registry import auditlog
 from django.conf import settings
 from django.utils import timezone
+from django.core.validators import FileExtensionValidator
+from django.core.exceptions import ValidationError
+
+# --- FILE UPLOAD SECURITY ---
+ALLOWED_EVIDENCE_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'csv', 'txt']
+ALLOWED_EVIDENCE_MIMES = [
+    'application/pdf',
+    'image/png',
+    'image/jpeg',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', # DOCX
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       # XLSX
+    'text/csv',
+    'text/plain'
+]
+
+def validate_mime_type(upload):
+    """Ensures the browser's stated MIME type matches our allowed list."""
+    if hasattr(upload, 'content_type'):
+        if upload.content_type not in ALLOWED_EVIDENCE_MIMES:
+            raise ValidationError("Unsupported file format. Allowed types: PDF, PNG, JPG, DOCX, XLSX, CSV, TXT.")
+
+# ----------------------------
 
 class ActiveSession(models.Model):
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='active_sessions')
@@ -75,7 +97,13 @@ class Control(models.Model):
 
 class Proof(models.Model):
     control = models.ForeignKey(Control, related_name='proofs', on_delete=models.CASCADE)
-    file = models.FileField(upload_to='evidence_proofs/')
+    file = models.FileField(
+        upload_to='evidence_proofs/',
+        validators=[
+            FileExtensionValidator(allowed_extensions=ALLOWED_EVIDENCE_EXTENSIONS),
+            validate_mime_type
+        ]
+    )
     uploaded_at = models.DateTimeField(auto_now_add=True)
     
     def __str__(self):
@@ -147,8 +175,15 @@ class TestPlan(models.Model):
     test_steps = models.TextField(blank=True, null=True, help_text="Step-by-step instructions for the auditor.")
     expected_evidence = models.TextField(blank=True, null=True, help_text="What artifacts must be provided to pass?")
     
-    # --- ADD THIS FIELD ---
-    attachment = models.FileField(upload_to='test_plans/', null=True, blank=True)
+    attachment = models.FileField(
+        upload_to='test_plans/', 
+        null=True, 
+        blank=True,
+        validators=[
+            FileExtensionValidator(allowed_extensions=ALLOWED_EVIDENCE_EXTENSIONS),
+            validate_mime_type
+        ]
+    )
     
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -211,9 +246,6 @@ class UserProfile(models.Model):
         self._original_role = self.role
 
     def save(self, *args, **kwargs):
-        # Auto-configure notification channels based on role assignment.
-        # This triggers on profile creation or if a user gets promoted/demoted.
-        # It will not overwrite manual toggles if the role hasn't changed.
         if not self.pk or self.role != getattr(self, '_original_role', None):
             if self.role == 'Admin':
                 self.notify_assessments = True
@@ -281,7 +313,6 @@ def notify_assessment_updates(sender, instance, created, **kwargs):
     if created and instance.status in ['Planned', 'In Progress']:
         return
         
-    # FIX: Added orig_status tracking here
     orig_status = getattr(instance, '_original_status', None)
         
     if instance.status == 'In QA Review' and orig_status != 'In QA Review':
@@ -304,7 +335,7 @@ def notify_assessment_updates(sender, instance, created, **kwargs):
                 description=f"Your assessment for {instance.control.control_id} was rejected by QA and returned for revisions.",
                 severity="critical",
                 target_control_id=instance.control.control_id
-            ) # FIX: Added the missing closing parenthesis here
+            ) 
 
     elif instance.status == 'Completed' and orig_status != 'Completed':
         if instance.assessor and instance.assessor.profile.notify_assessments:

@@ -20,8 +20,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { type ComplianceControl, type RemediationTask } from "@/lib/controls"
 import { type RiskItem, getRiskLevel } from "@/lib/risks"
-import { fetchApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
+
+// --- NEW: React Query Hooks ---
+import { useControls, useRisks, useTasks } from "@/hooks/use-grc-data"
 
 const chartConfig = {
   effective: { label: "Strong / Effective", color: "#22c55e" },
@@ -36,7 +38,6 @@ interface MetricsDashboardProps {
   onStatusClick?: (status: "Passing" | "Failing" | "Awaiting Approval" | "All") => void
 }
 
-// --- NEW: Reusable Pagination Component for Dashboard Widgets ---
 function DashboardPagination({ page, totalItems, onPageChange }: { page: number, totalItems: number, onPageChange: (p: number) => void }) {
   const pageSize = 5
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
@@ -71,13 +72,16 @@ function DashboardPagination({ page, totalItems, onPageChange }: { page: number,
 }
 
 export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashboardProps) {
-  const [controls, setControls] = useState<ComplianceControl[]>([])
-  const [risks, setRisks] = useState<RiskItem[]>([])
-  const [tasks, setTasks] = useState<RemediationTask[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // 1. Fetch data utilizing the shared React Query cache
+  const { data: controls = [], isLoading: loadingControls } = useControls()
+  const { data: risks = [], isLoading: loadingRisks } = useRisks()
+  const { data: tasks = [], isLoading: loadingTasks } = useTasks()
+
+  const isLoading = loadingControls || loadingRisks || loadingTasks
+
   const [role, setRole] = useState("Contributor")
 
-  // --- NEW: Pagination States for each widget ---
+  // Pagination States for each widget
   const [vulnPage, setVulnPage] = useState(1)
   const [auditInboxPage, setAuditInboxPage] = useState(1)
   const [qaInboxPage, setQaInboxPage] = useState(1)
@@ -88,32 +92,6 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
   useEffect(() => {
     const savedRole = localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role") || "Contributor"
     setRole(savedRole)
-
-    // Using the centralized fetchApi to handle URLs and Auth Tokens
-    Promise.all([
-      fetchApi("controls/"),
-      fetchApi("risks/"),
-      fetchApi("tasks/")
-    ])
-      .then(async ([ctrlRes, riskRes, taskRes]) => {
-        if (ctrlRes.ok) {
-          const cData = await ctrlRes.json()
-          setControls(cData.map((item: any) => ({ ...item, id: item.control_id })))
-        }
-        if (riskRes.ok) {
-          const rData = await riskRes.json()
-          setRisks(rData)
-        }
-        if (taskRes.ok) {
-          const tData = await taskRes.json()
-          setTasks(tData)
-        }
-        setIsLoading(false)
-      })
-      .catch((err) => {
-        console.error("Failed to fetch dashboard data:", err)
-        setIsLoading(false)
-      })
   }, [])
 
   // RBAC Visibility Flags
@@ -138,17 +116,14 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
     const operatingDeficient = controls.filter((c) => c.implementation_effectiveness === "Deficient").length
     const operatingNotTested = controls.filter((c) => c.implementation_effectiveness === "Not Tested" || !c.implementation_effectiveness).length
     
-    // Removed the slice(0,5) to allow pagination
     const recentFailures = controls.filter((c) => c.status === "Failing")
 
     const totalInherent = risks.reduce((acc, curr) => acc + curr.inherent_score, 0)
     const totalResidual = risks.reduce((acc, curr) => acc + curr.residual_score, 0)
     const riskMitigatedPercent = totalInherent === 0 ? 0 : Math.round(((totalInherent - totalResidual) / totalInherent) * 100)
 
-    // Removed the slice(0,5) to allow pagination
     const topVulnerabilities = [...risks].sort((a, b) => b.residual_score - a.residual_score)
     
-    // Removed the slice(0,5) to allow pagination
     const openTasks = tasks.filter(t => t.status !== "Resolved")
 
     const pendingQA = controls.flatMap((c) => 

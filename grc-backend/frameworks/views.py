@@ -18,6 +18,11 @@ from rest_framework.views import APIView
 from django.http import HttpResponse
 from .models import OrganizationSettings
 
+# --- NEW: Security & Authentication Imports ---
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.exceptions import AuthenticationFailed
+# ----------------------------------------------
+
 import datetime
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -32,6 +37,8 @@ import subprocess
 import sys
 import threading
 import shutil
+import sqlite3
+import tempfile
 
 from .services.pdf_generator import generate_audit_pdf
 
@@ -42,7 +49,6 @@ from .permissions import (
     TestPlanPermissions, 
     EvidenceUploadPermissions
 )
-
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
     queryset = TestPlan.objects.all()
@@ -198,20 +204,46 @@ class CustomAuthToken(ObtainAuthToken):
             }
         )
         
-        role = 'Contributor'
-        avatar_url = None
-        if hasattr(user, 'profile'):
-            role = user.profile.role
-            if user.profile.avatar:
-                avatar_url = request.build_absolute_uri(user.profile.avatar.url)
+        role = getattr(user.profile, 'role', 'Contributor') if hasattr(user, 'profile') else 'Contributor'
+        avatar_url = request.build_absolute_uri(user.profile.avatar.url) if hasattr(user, 'profile') and user.profile.avatar else None
 
-        return Response({
-            'token': token.key,
+        # Do NOT return the token in the JSON body
+        response = Response({
             'username': user.username,
             'role': role,
             'avatar': avatar_url
         })
+        
+        # Read the 'remember_me' flag passed from the frontend
+        remember_me = request.data.get('remember_me', False)
+        max_age = 14400 if remember_me else None # 4 hours or session-only
+        
+        # Inject the secure HttpOnly cookie
+        response.set_cookie(
+            key='grc_token',
+            value=token.key,
+            httponly=True,
+            secure=not settings.DEBUG, # Enforces HTTPS in production
+            samesite='Lax',
+            max_age=max_age
+        )
+        return response
+
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated]
     
+    def post(self, request):
+        # Delete the token and active session from the database
+        if hasattr(request, 'auth') and request.auth:
+            request.auth.delete()
+            ActiveSession.objects.filter(token_key=request.auth.key).delete()
+        
+        # Tell the browser to delete the cookie
+        response = Response({"status": "Logged out"})
+        response.delete_cookie('grc_token')
+        return response
+
 
 class ActiveSessionsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -429,22 +461,39 @@ class SystemBackupView(APIView):
 
     def get(self, request):
         if getattr(request.user.profile, 'role', '') != 'Admin':
-            return Response({"error": "Only Administrators can generate system backups."}, status=403)
+            return Response({"error": "Only Administrators can generate system backups."}, status=status.HTTP_403_FORBIDDEN)
             
         zip_buffer = io.BytesIO()
+        db_path = settings.DATABASES['default']['NAME']
         
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            db_path = settings.DATABASES['default']['NAME']
+        # 1. Create a secure temporary file for the database snapshot
+        temp_fd, temp_db_path = tempfile.mkstemp(suffix='.sqlite3')
+        os.close(temp_fd) # Close the raw file descriptor immediately so sqlite3 can use it
+        
+        try:
+            # 2. Use SQLite's native backup method to safely dump a consistent snapshot
             if os.path.exists(db_path):
-                zip_file.write(db_path, arcname='db.sqlite3')
-            
-            media_root = settings.MEDIA_ROOT
-            if os.path.exists(media_root):
-                for folder_name, subfolders, filenames in os.walk(media_root):
-                    for filename in filenames:
-                        file_path = os.path.join(folder_name, filename)
-                        arcname = os.path.relpath(file_path, media_root)
-                        zip_file.write(file_path, arcname=f"media/{arcname}")
+                with sqlite3.connect(db_path) as source_db:
+                    with sqlite3.connect(temp_db_path) as dest_db:
+                        source_db.backup(dest_db)
+
+            # 3. Zip the stable snapshot and the media files
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                if os.path.exists(temp_db_path):
+                    # Save it inside the zip as 'db.sqlite3' so the restore function finds it
+                    zip_file.write(temp_db_path, arcname='db.sqlite3')
+                
+                media_root = settings.MEDIA_ROOT
+                if os.path.exists(media_root):
+                    for folder_name, subfolders, filenames in os.walk(media_root):
+                        for filename in filenames:
+                            file_path = os.path.join(folder_name, filename)
+                            arcname = os.path.relpath(file_path, media_root)
+                            zip_file.write(file_path, arcname=f"media/{arcname}")
+        finally:
+            # 4. Clean up the temporary file so we don't leak storage space
+            if os.path.exists(temp_db_path):
+                os.remove(temp_db_path)
                         
         response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
         timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
@@ -531,7 +580,20 @@ class NotificationUpdateView(APIView):
 
 def execute_system_update(zip_path, base_dir):
     try:
+        # Resolve the absolute path of our intended extraction target
+        target_dir = os.path.abspath(base_dir)
+        
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            # ZIP SLIP MITIGATION: Iterate through every file in the archive
+            for member in zip_ref.namelist():
+                # Resolve the absolute path of where this specific file wants to go
+                member_path = os.path.abspath(os.path.join(target_dir, member))
+                
+                # If the resolved path escapes our base_dir, it is a malicious payload
+                if not member_path.startswith(target_dir + os.path.sep):
+                    raise Exception(f"Security Violation: Path traversal attempt detected with file {member}")
+            
+            # If we make it through the loop without an exception, the archive is safe to extract
             zip_ref.extractall(base_dir)
             
         backend_dir = os.path.join(base_dir, 'grc-backend')
