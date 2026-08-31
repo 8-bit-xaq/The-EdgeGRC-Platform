@@ -44,3 +44,7 @@ configs/ssl/*.pem
 .vscode/
 .DS_Store
 Thumbs.db
+
+# --- Dev tools ---
+build-updates.sh
+update-EdgeGRC.zip
