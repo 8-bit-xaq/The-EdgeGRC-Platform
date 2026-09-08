@@ -524,7 +524,7 @@ class SystemRestoreView(APIView):
             with zipfile.ZipFile(file_obj, 'r') as zip_ref:
                 file_names = zip_ref.namelist()
                 db_path = settings.DATABASES['default']['NAME']
-                media_root = settings.MEDIA_ROOT
+                media_root = os.path.abspath(settings.MEDIA_ROOT)
                 
                 for name in file_names:
                     if name == 'db.sqlite3':
@@ -533,7 +533,12 @@ class SystemRestoreView(APIView):
                     elif name.startswith('media/'):
                         rel_path = name.replace('media/', '', 1)
                         if rel_path: 
-                            target_path = os.path.join(media_root, rel_path)
+                            target_path = os.path.abspath(os.path.join(media_root, rel_path))
+                            
+                            # ZIP SLIP MITIGATION: Ensure target_path does not escape media_root
+                            if not target_path.startswith(media_root + os.path.sep):
+                                raise Exception(f"Security Violation: Path traversal attempt detected with file {name}")
+
                             os.makedirs(os.path.dirname(target_path), exist_ok=True)
                             with open(target_path, 'wb') as media_file:
                                 media_file.write(zip_ref.read(name))
@@ -841,4 +846,22 @@ class OrganizationSettingsView(APIView):
             'workspace_name': obj.workspace_name,
             'logo_data_url': obj.logo_data_url,
             'session_timeout': obj.session_timeout
+        })
+
+class VerifySessionView(APIView):
+    """
+    Validates the HttpOnly cookie/token on initial app load.
+    Returns 200 OK with the true user details if valid, or 401 if invalid.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        role = getattr(user.profile, 'role', 'Contributor') if hasattr(user, 'profile') else 'Contributor'
+        avatar_url = request.build_absolute_uri(user.profile.avatar.url) if hasattr(user, 'profile') and user.profile.avatar else None
+
+        return Response({
+            'username': user.username,
+            'role': role,
+            'avatar': avatar_url
         })

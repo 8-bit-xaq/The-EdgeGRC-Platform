@@ -82,12 +82,15 @@ components/
   notification-bell.tsx
   onboarding-wizard.tsx
   poam-tab.tsx
+  query-provider.tsx
   risk-register.tsx
   third-party-audit-exporter.tsx
   user-form-dialog.tsx
   user-management.tsx
   user-profile-settings.tsx
   workspace-settings.tsx
+hooks/
+  use-grc-data.ts
 lib/
   api.ts
   audit-logs.ts
@@ -290,6 +293,7 @@ import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Inter, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
+import { QueryProvider } from '@/components/query-provider' // <-- IMPORT THE PROVIDER
 import './globals.css'
 
 const inter = Inter({
@@ -342,9 +346,12 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${geistMono.variable} bg-background`}>
       <body className="font-sans antialiased">
-        {children}
-        <Toaster position="bottom-right" />
-        {process.env.NODE_ENV === 'production' && <Analytics />}
+        {/* WRAP THE ENTIRE APP IN THE QUERY PROVIDER */}
+        <QueryProvider>
+          {children}
+          <Toaster position="bottom-right" />
+          {process.env.NODE_ENV === 'production' && <Analytics />}
+        </QueryProvider>
       </body>
     </html>
   )
@@ -3782,9 +3789,13 @@ import {
   type ControlStatus,
   type EffectivenessStatus,
 } from "@/lib/controls"
-import { fetchApi } from "@/lib/api" // <-- NEW: API Wrapper
+import { fetchApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 import { toast } from "sonner"
+
+// --- NEW: React Query Imports ---
+import { useControls } from "@/hooks/use-grc-data"
+import { useQueryClient } from "@tanstack/react-query"
 
 type StatusFilter = "All" | ControlStatus
 
@@ -3821,42 +3832,20 @@ function StatusBadge({ status }: { status: ControlStatus }) {
 }
 
 export function ControlsTable({ targetControlId, onClearTarget, targetFilter, onClearFilter }: ControlsTableProps = {}) {
-  const [controls, setControls] = useState<ComplianceControl[]>([])
+  // Connect to the global cache
+  const { data: controls = [], isLoading } = useControls()
+  const queryClient = useQueryClient()
+
   const [query, setQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All")
   const [designFilter, setDesignFilter] = useState<"All" | EffectivenessStatus>("All")
   const [operatingFilter, setOperatingFilter] = useState<"All" | EffectivenessStatus>("All")
   const [editing, setEditing] = useState<ComplianceControl | null>(null)
-  const [isLoading, setIsLoading] = useState(true)
   const [role, setRole] = useState<string | null>(null)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
 
-  const fetchControls = () => {
-    fetchApi("controls/")
-      .then((res) => {
-        if (!res.ok) throw new Error(`API Error: ${res.status}`);
-        return res.json();
-      })
-      .then((data) => {
-        if (!Array.isArray(data)) return;
-        const formattedData = data.map((item: any) => ({
-          ...item,
-          id: item.control_id 
-        }));
-        setControls(formattedData);
-      })
-      .catch((err) => {
-        console.error("Failed to fetch controls:", err);
-        if (err.message !== "Session expired or user inactive") {
-          toast.error("Could not load controls. Check your connection or permissions.");
-        }
-      })
-      .finally(() => setIsLoading(false));
-  };
-
   useEffect(() => {
     setRole(localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role"));
-    fetchControls();
   }, []);
 
   useEffect(() => {
@@ -3945,7 +3934,6 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             if (proof.file) { 
               const formData = new FormData();
               formData.append('file', proof.file);
-              // Fallback to standard fetch with manual token just for FormData to prevent Content-Type conflicts
               const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token");
               const uploadRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/controls/${updated.id}/proofs/`, {
                 method: "POST",
@@ -3956,7 +3944,9 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             }
           }
         }
-        fetchControls();
+        
+        // --- NEW: Invalidate the global cache so all components refresh instantly ---
+        queryClient.invalidateQueries({ queryKey: ["controls"] })
         setEditing(null);
       } else {
         toast.error("Failed to save changes. You may not have permission.");
@@ -4249,7 +4239,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
         onSave={handleSave}
-        onRefresh={fetchControls}
+        onRefresh={() => queryClient.invalidateQueries({ queryKey: ["controls"] })}
         userRole={role}
       />
     </section>
@@ -4263,31 +4253,37 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
 import { useState, useEffect } from 'react'
 import { GrcApp } from '@/components/grc-app'
 import { LoginScreen } from '@/components/login-screen'
+import { fetchApi } from '@/lib/api'
 
 export function DemoAuthGate() {
   const [isSignedIn, setIsSignedIn] = useState(false)
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
 
-  // 1. Check storage as soon as the app loads
   useEffect(() => {
-    const token = localStorage.getItem('grc_token') || sessionStorage.getItem('grc_token')
-    if (token) {
+    // Rely on the username metadata instead of the token for initial rendering
+    const user = localStorage.getItem('grc_username') || sessionStorage.getItem('grc_username')
+    if (user) {
       setIsSignedIn(true)
     }
     setIsCheckingAuth(false)
   }, [])
 
-  // 2. Ensure everything is wiped when logging out
-  function handleLogout() {
-    const keysToRemove = ["grc_token", "grc_username", "grc_role", "grc_avatar"]
-    keysToRemove.forEach(k => {
-      localStorage.removeItem(k)
-      sessionStorage.removeItem(k)
-    })
-    setIsSignedIn(false)
+  async function handleLogout() {
+    try {
+      // Tell the backend to destroy the session and the cookie
+      await fetchApi("logout/", { method: "POST" })
+    } catch (err) {
+      console.error("Logout error", err)
+    } finally {
+      const keysToRemove = ["grc_username", "grc_role", "grc_avatar", "grc_token"] // Ensure old tokens are purged
+      keysToRemove.forEach(k => {
+        localStorage.removeItem(k)
+        sessionStorage.removeItem(k)
+      })
+      setIsSignedIn(false)
+    }
   }
 
-  // Don't flash the login screen while checking for a token
   if (isCheckingAuth) return null 
 
   if (isSignedIn) {
@@ -5291,7 +5287,8 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
     try {
       const response = await fetchApi("login/", {
         method: "POST",
-        body: JSON.stringify({ username, password }),
+        // WE ADDED remember_me HERE:
+        body: JSON.stringify({ username, password, remember_me: rememberMe }),
       })
 
       if (response.ok) {
@@ -5303,13 +5300,12 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
           sessionStorage.removeItem(k)
         })
         
+        // We no longer store data.token anywhere. The browser holds the cookie securely.
         if (rememberMe) {
-          localStorage.setItem("grc_token", data.token)
           localStorage.setItem("grc_username", username)
           localStorage.setItem("grc_role", data.role) 
           if (data.avatar) localStorage.setItem("grc_avatar", data.avatar) 
         } else {
-          sessionStorage.setItem("grc_token", data.token)
           sessionStorage.setItem("grc_username", username)
           sessionStorage.setItem("grc_role", data.role) 
           if (data.avatar) sessionStorage.setItem("grc_avatar", data.avatar) 
@@ -5477,8 +5473,10 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { type ComplianceControl, type RemediationTask } from "@/lib/controls"
 import { type RiskItem, getRiskLevel } from "@/lib/risks"
-import { fetchApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
+
+// --- NEW: React Query Hooks ---
+import { useControls, useRisks, useTasks } from "@/hooks/use-grc-data"
 
 const chartConfig = {
   effective: { label: "Strong / Effective", color: "#22c55e" },
@@ -5493,7 +5491,6 @@ interface MetricsDashboardProps {
   onStatusClick?: (status: "Passing" | "Failing" | "Awaiting Approval" | "All") => void
 }
 
-// --- NEW: Reusable Pagination Component for Dashboard Widgets ---
 function DashboardPagination({ page, totalItems, onPageChange }: { page: number, totalItems: number, onPageChange: (p: number) => void }) {
   const pageSize = 5
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize))
@@ -5528,13 +5525,16 @@ function DashboardPagination({ page, totalItems, onPageChange }: { page: number,
 }
 
 export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashboardProps) {
-  const [controls, setControls] = useState<ComplianceControl[]>([])
-  const [risks, setRisks] = useState<RiskItem[]>([])
-  const [tasks, setTasks] = useState<RemediationTask[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // 1. Fetch data utilizing the shared React Query cache
+  const { data: controls = [], isLoading: loadingControls } = useControls()
+  const { data: risks = [], isLoading: loadingRisks } = useRisks()
+  const { data: tasks = [], isLoading: loadingTasks } = useTasks()
+
+  const isLoading = loadingControls || loadingRisks || loadingTasks
+
   const [role, setRole] = useState("Contributor")
 
-  // --- NEW: Pagination States for each widget ---
+  // Pagination States for each widget
   const [vulnPage, setVulnPage] = useState(1)
   const [auditInboxPage, setAuditInboxPage] = useState(1)
   const [qaInboxPage, setQaInboxPage] = useState(1)
@@ -5545,32 +5545,6 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
   useEffect(() => {
     const savedRole = localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role") || "Contributor"
     setRole(savedRole)
-
-    // Using the centralized fetchApi to handle URLs and Auth Tokens
-    Promise.all([
-      fetchApi("controls/"),
-      fetchApi("risks/"),
-      fetchApi("tasks/")
-    ])
-      .then(async ([ctrlRes, riskRes, taskRes]) => {
-        if (ctrlRes.ok) {
-          const cData = await ctrlRes.json()
-          setControls(cData.map((item: any) => ({ ...item, id: item.control_id })))
-        }
-        if (riskRes.ok) {
-          const rData = await riskRes.json()
-          setRisks(rData)
-        }
-        if (taskRes.ok) {
-          const tData = await taskRes.json()
-          setTasks(tData)
-        }
-        setIsLoading(false)
-      })
-      .catch((err) => {
-        console.error("Failed to fetch dashboard data:", err)
-        setIsLoading(false)
-      })
   }, [])
 
   // RBAC Visibility Flags
@@ -5595,17 +5569,14 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
     const operatingDeficient = controls.filter((c) => c.implementation_effectiveness === "Deficient").length
     const operatingNotTested = controls.filter((c) => c.implementation_effectiveness === "Not Tested" || !c.implementation_effectiveness).length
     
-    // Removed the slice(0,5) to allow pagination
     const recentFailures = controls.filter((c) => c.status === "Failing")
 
     const totalInherent = risks.reduce((acc, curr) => acc + curr.inherent_score, 0)
     const totalResidual = risks.reduce((acc, curr) => acc + curr.residual_score, 0)
     const riskMitigatedPercent = totalInherent === 0 ? 0 : Math.round(((totalInherent - totalResidual) / totalInherent) * 100)
 
-    // Removed the slice(0,5) to allow pagination
     const topVulnerabilities = [...risks].sort((a, b) => b.residual_score - a.residual_score)
     
-    // Removed the slice(0,5) to allow pagination
     const openTasks = tasks.filter(t => t.status !== "Resolved")
 
     const pendingQA = controls.flatMap((c) => 
@@ -6809,6 +6780,31 @@ export function PoamTab({ control, role }: PoamTabProps) {
       )}
     </div>
   )
+}
+</file>
+
+<file path="components/query-provider.tsx">
+"use client"
+
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { useState } from "react"
+
+export function QueryProvider({ children }: { children: React.ReactNode }) {
+  // Initialize QueryClient inside useState to ensure it is only created once per user session
+  const [queryClient] = useState(
+    () =>
+      new QueryClient({
+        defaultOptions: {
+          queries: {
+            staleTime: 5 * 60 * 1000, // Data remains "fresh" for 5 minutes
+            refetchOnWindowFocus: true, // Auto-refresh when user tabs back
+            retry: 1, // Only retry failed requests once to prevent spamming
+          },
+        },
+      })
+  )
+
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
 }
 </file>
 
@@ -8301,7 +8297,7 @@ export function WorkspaceSettings() {
   const [logoDataUrl, setLogoDataUrl] = useState<string | null>(organization.logoDataUrl)
 
   // Security & Backup draft state
-  const [sessionTimeout, setSessionTimeout] = useState("30 minutes")
+  const [sessionTimeout, setSessionTimeout] = useState("4 hours") // Default fallback
   const [sessions, setSessions] = useState<SessionRow[]>([])
   const [saving, setSaving] = useState(false)
   const [isLoadingSessions, setIsLoadingSessions] = useState(false)
@@ -8333,6 +8329,25 @@ export function WorkspaceSettings() {
   const [deleteUsername, setDeleteUsername] = useState("")
   const [deletePassword, setDeletePassword] = useState("")
   const [isDeleting, setIsDeleting] = useState(false)
+
+  // Fetch initial organization settings and session timeout from API on mount
+  useEffect(() => {
+    fetchApi("organization/")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.session_timeout) {
+          // Convert database minutes back to UI string
+          const mins = data.session_timeout
+          if (mins === 15) setSessionTimeout("15 minutes")
+          else if (mins === 30) setSessionTimeout("30 minutes")
+          else if (mins === 60) setSessionTimeout("1 hour")
+          else if (mins === 240) setSessionTimeout("4 hours")
+          else if (mins === 480) setSessionTimeout("8 hours")
+          else setSessionTimeout(`${mins} minutes`)
+        }
+      })
+      .catch((err) => console.error("Failed to fetch org settings:", err))
+  }, [])
 
   // Sync local form inputs when the global context loads from storage
   useEffect(() => {
@@ -8430,19 +8445,47 @@ export function WorkspaceSettings() {
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     setSaving(true)
-    setTimeout(() => {
+    
+    // Convert UI string to integer minutes for the database
+    let timeoutMinutes = 240
+    if (sessionTimeout === "15 minutes") timeoutMinutes = 15
+    if (sessionTimeout === "30 minutes") timeoutMinutes = 30
+    if (sessionTimeout === "1 hour") timeoutMinutes = 60
+    if (sessionTimeout === "4 hours") timeoutMinutes = 240
+    if (sessionTimeout === "8 hours") timeoutMinutes = 480
+
+    try {
+      const response = await fetchApi("organization/", {
+        method: "PUT",
+        body: JSON.stringify({
+          company_name: companyName.trim() || organization.companyName,
+          workspace_name: workspaceName.trim() || organization.workspaceName,
+          logo_data_url: logoDataUrl,
+          session_timeout: timeoutMinutes
+        }),
+      })
+
+      if (!response.ok) throw new Error("Failed to save organization settings")
+
+      // Update the frontend context so the navbar and UI update instantly
       updateOrganization({
         companyName: companyName.trim() || organization.companyName,
         workspaceName: workspaceName.trim() || organization.workspaceName,
         logoDataUrl,
       })
-      setSaving(false)
+
       toast.success("Changes saved", {
         description: "Your workspace settings have been updated.",
       })
-    }, 800)
+    } catch (error) {
+      toast.error("Save failed", {
+        description: "Could not update settings. Please check your permissions.",
+      })
+    } finally {
+      setSaving(false)
+    }
   }
 
   function handleDeleteWorkspace() {
@@ -9234,45 +9277,70 @@ export function WorkspaceSettings() {
 }
 </file>
 
+<file path="hooks/use-grc-data.ts">
+import { useQuery } from "@tanstack/react-query"
+import { fetchApi } from "@/lib/api"
+import type { ComplianceControl, RemediationTask } from "@/lib/controls"
+import type { RiskItem } from "@/lib/risks"
+
+export function useControls() {
+  return useQuery<ComplianceControl[]>({
+    queryKey: ["controls"],
+    queryFn: async () => {
+      const res = await fetchApi("controls/")
+      if (!res.ok) throw new Error("Failed to fetch controls")
+      const data = await res.json()
+      // Normalize the ID field globally before caching
+      return data.map((c: any) => ({ ...c, id: c.control_id }))
+    },
+  })
+}
+
+export function useRisks() {
+  return useQuery<RiskItem[]>({
+    queryKey: ["risks"],
+    queryFn: async () => {
+      const res = await fetchApi("risks/")
+      if (!res.ok) throw new Error("Failed to fetch risks")
+      return res.json()
+    },
+  })
+}
+
+export function useTasks() {
+  return useQuery<RemediationTask[]>({
+    queryKey: ["tasks"],
+    queryFn: async () => {
+      const res = await fetchApi("tasks/")
+      if (!res.ok) throw new Error("Failed to fetch tasks")
+      return res.json()
+    },
+  })
+}
+</file>
+
 <file path="lib/api.ts">
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 
-/**
- * A centralized fetch wrapper that automatically attaches the base URL
- * and the user's authorization token to every request.
- */
 export async function fetchApi(endpoint: string, options: RequestInit = {}) {
-  // 1. Get the token from storage
-  const token = typeof window !== "undefined" 
-    ? localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token") 
-    : null
-
-  // 2. Set up headers, merging any custom headers passed in
   const headers: HeadersInit = {
     "Content-Type": "application/json",
     ...options.headers,
   }
 
-  // 3. Attach the token if it exists
-  if (token) {
-    (headers as Record<string, string>)["Authorization"] = `Token ${token}`
-  }
-
-  // 4. Construct the full URL (ensuring no double slashes)
   const cleanEndpoint = endpoint.startsWith("/") ? endpoint.slice(1) : endpoint
   const url = `${API_BASE_URL}/${cleanEndpoint}`
 
-  // 5. Execute the fetch
   const response = await fetch(url, {
     ...options,
     headers,
+    credentials: "include", // <-- Crucial: Instructs browser to send HttpOnly cookies
   })
 
-  // 6. Global 401 Unauthorized handling
+  // Global 401 Unauthorized handling
   if (response.status === 401 && typeof window !== "undefined") {
-    // If the token expires or is invalid, clear storage and force a login
-    localStorage.removeItem("grc_token")
-    sessionStorage.removeItem("grc_token")
+    localStorage.removeItem("grc_username")
+    sessionStorage.removeItem("grc_username")
     window.location.reload()
   }
 
@@ -9746,7 +9814,7 @@ export function cn(...inputs: ClassValue[]) {
 </file>
 
 <file path="public/version.json">
-{ "version": "1.0.2" }
+{"version": "1.0.4"}
 </file>
 
 <file path=".gitignore">
@@ -9817,7 +9885,7 @@ export default nextConfig;
 <file path="package.json">
 {
   "name": "my-project",
-  "version": "0.1.0",
+  "version": "1.0.4",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -9827,6 +9895,7 @@ export default nextConfig;
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
+    "@tanstack/react-query": "^5.102.4",
     "@vercel/analytics": "1.6.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

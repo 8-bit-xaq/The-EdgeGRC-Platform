@@ -24,7 +24,8 @@ from .views import (
     HTTPSConfigurationView,
     OrganizationSettingsView,
     FactoryResetView,
-    LogoutView
+    LogoutView,
+    VerifySessionView,
 )
 
 urlpatterns = [
@@ -57,4 +58,5 @@ urlpatterns = [
     path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
     path('factory-reset/', FactoryResetView.as_view(), name='factory-reset'),
     path('logout/', LogoutView.as_view(), name='api_logout'),
+    path('verify-session/', VerifySessionView.as_view(), name='verify-session'),
 ]
