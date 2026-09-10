@@ -173,10 +173,9 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             if (proof.file) { 
               const formData = new FormData();
               formData.append('file', proof.file);
-              const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token");
               const uploadRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/controls/${updated.id}/proofs/`, {
                 method: "POST",
-                headers: { "Authorization": `Token ${token}` },
+                credentials: "include",
                 body: formData, 
               });
               if (!uploadRes.ok) toast.error(`Failed to upload ${proof.name}.`);

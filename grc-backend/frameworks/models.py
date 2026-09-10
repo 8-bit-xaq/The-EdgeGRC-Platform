@@ -5,26 +5,37 @@ from django.dispatch import receiver
 from auditlog.registry import auditlog
 from django.conf import settings
 from django.utils import timezone
-from django.core.validators import FileExtensionValidator
 from django.core.exceptions import ValidationError
+import os
+import magic
 
 # --- FILE UPLOAD SECURITY ---
-ALLOWED_EVIDENCE_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'csv', 'txt']
-ALLOWED_EVIDENCE_MIMES = [
-    'application/pdf',
-    'image/png',
-    'image/jpeg',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document', # DOCX
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',       # XLSX
-    'text/csv',
-    'text/plain'
-]
+SECURE_MIME_MAPPING = {
+    'pdf': ['application/pdf'],
+    'png': ['image/png'],
+    'jpg': ['image/jpeg'],
+    'jpeg': ['image/jpeg'],
+    'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'],
+    'xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'],
+    'csv': ['text/csv', 'text/plain'],
+    'txt': ['text/plain', 'inode/x-empty'] # Permits empty text files
+}
 
-def validate_mime_type(upload):
-    """Ensures the browser's stated MIME type matches our allowed list."""
-    if hasattr(upload, 'content_type'):
-        if upload.content_type not in ALLOWED_EVIDENCE_MIMES:
-            raise ValidationError("Unsupported file format. Allowed types: PDF, PNG, JPG, DOCX, XLSX, CSV, TXT.")
+def validate_secure_upload(upload):
+    """Validates that the file's extension strictly matches its cryptographic signature."""
+    ext = os.path.splitext(upload.name)[1].lower().strip('.')
+    
+    if ext not in SECURE_MIME_MAPPING:
+        raise ValidationError(f"Unsupported file extension: .{ext}")
+
+    file_header = upload.read(2048)
+    upload.seek(0) 
+    
+    real_mime_type = magic.from_buffer(file_header, mime=True)
+    allowed_mimes = SECURE_MIME_MAPPING[ext]
+    
+    if real_mime_type not in allowed_mimes:
+        raise ValidationError(f"File spoofing detected. A .{ext} file should not contain '{real_mime_type}' data.")
 
 # ----------------------------
 
@@ -99,10 +110,7 @@ class Proof(models.Model):
     control = models.ForeignKey(Control, related_name='proofs', on_delete=models.CASCADE)
     file = models.FileField(
         upload_to='evidence_proofs/',
-        validators=[
-            FileExtensionValidator(allowed_extensions=ALLOWED_EVIDENCE_EXTENSIONS),
-            validate_mime_type
-        ]
+        validators=[validate_secure_upload]
     )
     uploaded_at = models.DateTimeField(auto_now_add=True)
     
@@ -179,10 +187,7 @@ class TestPlan(models.Model):
         upload_to='test_plans/', 
         null=True, 
         blank=True,
-        validators=[
-            FileExtensionValidator(allowed_extensions=ALLOWED_EVIDENCE_EXTENSIONS),
-            validate_mime_type
-        ]
+        validators=[validate_secure_upload]
     )
     
     updated_at = models.DateTimeField(auto_now=True)

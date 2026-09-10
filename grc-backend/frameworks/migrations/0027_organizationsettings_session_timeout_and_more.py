@@ -25,11 +25,11 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='proof',
             name='file',
-            field=models.FileField(upload_to='evidence_proofs/', validators=[django.core.validators.FileExtensionValidator(allowed_extensions=['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'csv', 'txt']), frameworks.models.validate_mime_type]),
+            field=models.FileField(upload_to='evidence_proofs/', validators=[frameworks.models.validate_secure_upload]),
         ),
         migrations.AlterField(
             model_name='testplan',
             name='attachment',
-            field=models.FileField(blank=True, null=True, upload_to='test_plans/', validators=[django.core.validators.FileExtensionValidator(allowed_extensions=['pdf', 'png', 'jpg', 'jpeg', 'docx', 'xlsx', 'csv', 'txt']), frameworks.models.validate_mime_type]),
+            field=models.FileField(blank=True, null=True, upload_to='test_plans/', validators=[frameworks.models.validate_secure_upload]),
         ),
     ]

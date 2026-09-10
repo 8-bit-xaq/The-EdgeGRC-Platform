@@ -149,10 +149,9 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
       }
 
       // Bypass fetchApi wrapper to allow the browser to auto-set the multipart boundary header
-      const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
       const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/controls/${control.id}/test-plan/`, {
         method: "PATCH",
-        headers: { "Authorization": `Token ${token}` },
+        credentials: "include",
         body: formData
       })
 

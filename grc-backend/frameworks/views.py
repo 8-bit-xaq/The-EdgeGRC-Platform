@@ -17,6 +17,7 @@ from django.utils import timezone
 from rest_framework.views import APIView
 from django.http import HttpResponse
 from .models import OrganizationSettings
+from django.core.exceptions import ValidationError
 
 # --- NEW: Security & Authentication Imports ---
 from rest_framework.authentication import TokenAuthentication
@@ -143,8 +144,18 @@ class ProofUploadView(views.APIView):
         
         file_obj = request.FILES.get('file')
         if file_obj:
-            Proof.objects.create(control=control, file=file_obj)
-            return Response({'status': 'file uploaded'}, status=status.HTTP_201_CREATED)
+            # 1. Instantiate the object without saving to the database yet
+            proof = Proof(control=control, file=file_obj)
+            
+            try:
+                # 2. Explicitly trigger all model validators (including python-magic)
+                proof.full_clean()
+                # 3. Save only if validation passes
+                proof.save()
+                return Response({'status': 'file uploaded'}, status=status.HTTP_201_CREATED)
+            except ValidationError as e:
+                # Catch the python-magic rejection and return it to the frontend
+                return Response({'error': e.messages}, status=status.HTTP_400_BAD_REQUEST)
         
         return Response({'error': 'No file provided'}, status=status.HTTP_400_BAD_REQUEST)
 
