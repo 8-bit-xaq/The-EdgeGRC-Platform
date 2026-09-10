@@ -1,3 +1,4 @@
+from django.middleware.csrf import get_token
 from rest_framework import generics, views, status
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -221,6 +222,7 @@ class CustomAuthToken(ObtainAuthToken):
         avatar_url = request.build_absolute_uri(user.profile.avatar.url) if hasattr(user, 'profile') and user.profile.avatar else None
 
         # Do NOT return the token in the JSON body
+        get_token(request)
         response = Response({
             'username': user.username,
             'role': role,
@@ -303,6 +305,27 @@ class ActiveSessionsView(APIView):
         
         return Response({"message": "Session successfully revoked."}, status=status.HTTP_200_OK)
 
+
+def background_audit_pdf_task(export_data, company_name, export_password, logo_data_url):
+    import os, uuid
+    from django.conf import settings
+    from frameworks.services.pdf_generator import generate_audit_pdf
+    
+    pdf_buffer = generate_audit_pdf(export_data, company_name, export_password, logo_data_url)
+    
+    RESULTS_DIR = os.path.join(settings.BASE_DIR, 'task_results')
+    os.makedirs(RESULTS_DIR, exist_ok=True)
+    
+    file_path = os.path.join(RESULTS_DIR, f"{uuid.uuid4().hex}.pdf")
+    
+    with open(file_path, 'wb') as f:
+        f.write(pdf_buffer.getvalue())
+        
+    return {
+        'file_path': file_path,
+        'filename': 'audit-report.pdf',
+        'content_type': 'application/pdf'
+    }
 
 class ExportAuditPackageView(APIView):
     permission_classes = [IsAuthenticated]
@@ -428,10 +451,9 @@ class ExportAuditPackageView(APIView):
             }
 
         if export_format == 'pdf':
-            pdf_buffer = generate_audit_pdf(export_data, company_name, export_password, logo_data_url)
-            response = HttpResponse(pdf_buffer.getvalue(), content_type='application/pdf')
-            response['Content-Disposition'] = 'attachment; filename="audit-report.pdf"'
-            return response
+            from django_q.tasks import async_task
+            task_id = async_task('frameworks.views.background_audit_pdf_task', export_data, company_name, export_password, logo_data_url)
+            return Response({'task_id': task_id})
 
         if export_format == 'zip':
             zip_buffer = io.BytesIO()
@@ -469,6 +491,53 @@ class ExportAuditPackageView(APIView):
         })
 
 
+import uuid
+import os
+from django.conf import settings
+
+RESULTS_DIR = os.path.join(settings.BASE_DIR, 'task_results')
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+def background_backup_task():
+    import io, sqlite3, tempfile, zipfile
+    from django.conf import settings
+    zip_buffer = io.BytesIO()
+    db_path = settings.DATABASES['default']['NAME']
+    temp_fd, temp_db_path = tempfile.mkstemp(suffix='.sqlite3')
+    os.close(temp_fd)
+    try:
+        if os.path.exists(db_path):
+            with sqlite3.connect(db_path) as source_db:
+                with sqlite3.connect(temp_db_path) as dest_db:
+                    source_db.backup(dest_db)
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            if os.path.exists(temp_db_path):
+                zip_file.write(temp_db_path, arcname='db.sqlite3')
+            media_root = settings.MEDIA_ROOT
+            if os.path.exists(media_root):
+                for folder_name, subfolders, filenames in os.walk(media_root):
+                    for filename in filenames:
+                        file_path = os.path.join(folder_name, filename)
+                        arcname = os.path.relpath(file_path, media_root)
+                        zip_file.write(file_path, arcname=f"media/{arcname}")
+    finally:
+        if os.path.exists(temp_db_path):
+            os.remove(temp_db_path)
+            
+    from django.utils import timezone
+    timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"grc_system_backup_{timestamp}.zip"
+    file_path = os.path.join(RESULTS_DIR, f"{uuid.uuid4().hex}.zip")
+    
+    with open(file_path, 'wb') as f:
+        f.write(zip_buffer.getvalue())
+        
+    return {
+        'file_path': file_path,
+        'filename': filename,
+        'content_type': 'application/zip'
+    }
+
 class SystemBackupView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -476,43 +545,42 @@ class SystemBackupView(APIView):
         if getattr(request.user.profile, 'role', '') != 'Admin':
             return Response({"error": "Only Administrators can generate system backups."}, status=status.HTTP_403_FORBIDDEN)
             
-        zip_buffer = io.BytesIO()
-        db_path = settings.DATABASES['default']['NAME']
-        
-        # 1. Create a secure temporary file for the database snapshot
-        temp_fd, temp_db_path = tempfile.mkstemp(suffix='.sqlite3')
-        os.close(temp_fd) # Close the raw file descriptor immediately so sqlite3 can use it
-        
-        try:
-            # 2. Use SQLite's native backup method to safely dump a consistent snapshot
-            if os.path.exists(db_path):
-                with sqlite3.connect(db_path) as source_db:
-                    with sqlite3.connect(temp_db_path) as dest_db:
-                        source_db.backup(dest_db)
+        from django_q.tasks import async_task
+        task_id = async_task('frameworks.views.background_backup_task')
+        return Response({'task_id': task_id})
 
-            # 3. Zip the stable snapshot and the media files
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                if os.path.exists(temp_db_path):
-                    # Save it inside the zip as 'db.sqlite3' so the restore function finds it
-                    zip_file.write(temp_db_path, arcname='db.sqlite3')
-                
-                media_root = settings.MEDIA_ROOT
-                if os.path.exists(media_root):
-                    for folder_name, subfolders, filenames in os.walk(media_root):
-                        for filename in filenames:
-                            file_path = os.path.join(folder_name, filename)
-                            arcname = os.path.relpath(file_path, media_root)
-                            zip_file.write(file_path, arcname=f"media/{arcname}")
-        finally:
-            # 4. Clean up the temporary file so we don't leak storage space
-            if os.path.exists(temp_db_path):
-                os.remove(temp_db_path)
-                        
-        response = HttpResponse(zip_buffer.getvalue(), content_type='application/zip')
-        timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
-        response['Content-Disposition'] = f'attachment; filename="grc_system_backup_{timestamp}.zip"'
-        return response
 
+def background_restore_task(zip_path):
+    import zipfile, os
+    from django.conf import settings
+    from django.db import connection
+    
+    try:
+        connection.close()
+        
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            file_names = zip_ref.namelist()
+            db_path = settings.DATABASES['default']['NAME']
+            media_root = os.path.abspath(settings.MEDIA_ROOT)
+            
+            for name in file_names:
+                if name == 'db.sqlite3':
+                    with open(db_path, 'wb') as db_file:
+                        db_file.write(zip_ref.read(name))
+                elif name.startswith('media/'):
+                    rel_path = name.replace('media/', '', 1)
+                    if rel_path: 
+                        target_path = os.path.abspath(os.path.join(media_root, rel_path))
+                        if not target_path.startswith(media_root + os.path.sep):
+                            raise Exception(f"Security Violation: Path traversal attempt detected with file {name}")
+                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                        with open(target_path, 'wb') as media_file:
+                            media_file.write(zip_ref.read(name))
+                            
+        return {"status": "success"}
+    finally:
+        if os.path.exists(zip_path):
+            os.remove(zip_path)
 
 class SystemRestoreView(APIView):
     permission_classes = [IsAuthenticated]
@@ -529,35 +597,16 @@ class SystemRestoreView(APIView):
         if not file_obj.name.endswith('.zip'):
             return Response({"error": "Invalid file format. Please provide a valid ZIP backup."}, status=status.HTTP_400_BAD_REQUEST)
 
-        try:
-            connection.close()
-            
-            with zipfile.ZipFile(file_obj, 'r') as zip_ref:
-                file_names = zip_ref.namelist()
-                db_path = settings.DATABASES['default']['NAME']
-                media_root = os.path.abspath(settings.MEDIA_ROOT)
+        # Save uploaded file to temp path so worker can read it
+        import tempfile, os
+        temp_fd, temp_zip_path = tempfile.mkstemp(suffix='.zip')
+        with os.fdopen(temp_fd, 'wb') as f:
+            for chunk in file_obj.chunks():
+                f.write(chunk)
                 
-                for name in file_names:
-                    if name == 'db.sqlite3':
-                        with open(db_path, 'wb') as db_file:
-                            db_file.write(zip_ref.read(name))
-                    elif name.startswith('media/'):
-                        rel_path = name.replace('media/', '', 1)
-                        if rel_path: 
-                            target_path = os.path.abspath(os.path.join(media_root, rel_path))
-                            
-                            # ZIP SLIP MITIGATION: Ensure target_path does not escape media_root
-                            if not target_path.startswith(media_root + os.path.sep):
-                                raise Exception(f"Security Violation: Path traversal attempt detected with file {name}")
-
-                            os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                            with open(target_path, 'wb') as media_file:
-                                media_file.write(zip_ref.read(name))
-                                
-            return Response({"status": "System restored successfully."}, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            return Response({"error": f"Failed to restore backup: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        from django_q.tasks import async_task
+        task_id = async_task('frameworks.views.background_restore_task', temp_zip_path)
+        return Response({'task_id': task_id})
 
 
 class NotificationListView(generics.ListAPIView):
@@ -619,7 +668,7 @@ def execute_system_update(zip_path, base_dir):
         if os.path.exists(manage_path):
             subprocess.run([sys.executable, manage_path, 'migrate'], cwd=backend_dir, check=True)
             
-        subprocess.run(['sudo', 'systemctl', 'restart', 'grc-backend', 'grc-frontend'], check=True)
+        subprocess.run(['sudo', 'systemctl', 'restart', 'grc-backend', 'grc-frontend', 'grc-worker'], check=True)
         
     except Exception as e:
         print(f"CRITICAL: System update failed: {e}")
@@ -871,8 +920,58 @@ class VerifySessionView(APIView):
         role = getattr(user.profile, 'role', 'Contributor') if hasattr(user, 'profile') else 'Contributor'
         avatar_url = request.build_absolute_uri(user.profile.avatar.url) if hasattr(user, 'profile') and user.profile.avatar else None
 
+        get_token(request)
         return Response({
             'username': user.username,
             'role': role,
             'avatar': avatar_url
         })
+from django_q.models import Task
+import mimetypes
+
+class JobStatusView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, task_id):
+        try:
+            task = Task.objects.get(id=task_id)
+            if task.success:
+                return Response({'status': 'SUCCESS', 'result': task.result})
+            else:
+                return Response({'status': 'FAILED', 'error': str(task.result)})
+        except Task.DoesNotExist:
+            return Response({'status': 'PENDING'})
+
+class JobDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request, task_id):
+        try:
+            task = Task.objects.get(id=task_id)
+            if not task.success:
+                return Response({'error': 'Task failed'}, status=400)
+                
+            result = task.result
+            if not isinstance(result, dict) or 'file_path' not in result:
+                return Response({'error': 'Task does not contain a downloadable file'}, status=400)
+                
+            file_path = result['file_path']
+            filename = result['filename']
+            content_type = result.get('content_type', 'application/octet-stream')
+            
+            if not os.path.exists(file_path):
+                return Response({'error': 'File not found'}, status=404)
+                
+            with open(file_path, 'rb') as f:
+                response = HttpResponse(f.read(), content_type=content_type)
+                response['Content-Disposition'] = f'attachment; filename="{filename}"'
+                
+            # Optional cleanup after download
+            try:
+                os.remove(file_path)
+            except:
+                pass
+                
+            return response
+        except Task.DoesNotExist:
+            return Response({'error': 'Task not found'}, status=404)

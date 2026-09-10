@@ -105,7 +105,7 @@ export function UserProfileSettings() {
 
         try {
           // Bypass fetchApi wrapper to allow the browser to auto-set the multipart boundary header
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/users/${userId}/`, {
+          const response = await fetchApi(`/users/${userId}/`, {
             method: "PATCH",
             credentials: "include",
             body: formData,

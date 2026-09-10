@@ -1,80 +1,79 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import * as React from 'react'
 import { Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { fetchApi } from '@/lib/api' // <-- NEW: API Wrapper
 
 interface LoginScreenProps {
   onSignIn: () => void
 }
 
-interface FormErrors {
-  username?: string
-  password?: string
-}
+const loginSchema = z.object({
+  username: z.string().min(1, 'Please enter your username.'),
+  password: z.string().min(1, 'Please enter your password.'),
+  rememberMe: z.boolean().default(false),
+})
+
+type LoginFormValues = z.infer<typeof loginSchema>
 
 export function LoginScreen({ onSignIn }: LoginScreenProps) {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [rememberMe, setRememberMe] = useState(false)
-  const [isSubmitting, setIsSubmitting] = useState(false)
-  const [errors, setErrors] = useState<FormErrors>({})
+  const [showPassword, setShowPassword] = React.useState(false)
+  const [serverError, setServerError] = React.useState<string | null>(null)
 
-  function validate() {
-    const nextErrors: FormErrors = {}
-    if (!username.trim()) nextErrors.username = 'Enter your username.'
-    if (!password) nextErrors.password = 'Enter your password.'
-    setErrors(nextErrors)
-    return Object.keys(nextErrors).length === 0
-  }
+  const {
+    register,
+    handleSubmit,
+    formState: { errors, isSubmitting },
+  } = useForm<LoginFormValues>({
+    resolver: zodResolver(loginSchema),
+    defaultValues: {
+      username: '',
+      password: '',
+      rememberMe: false,
+    },
+  })
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!validate()) return
-
-    setIsSubmitting(true)
+  async function onSubmit(values: LoginFormValues) {
+    setServerError(null)
     
     try {
-      const response = await fetchApi("login/", {
+      const res = await fetch("/api/login/", {
         method: "POST",
-        // WE ADDED remember_me HERE:
-        body: JSON.stringify({ username, password, remember_me: rememberMe }),
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          username: values.username,
+          password: values.password
+        })
       })
 
-      if (response.ok) {
-        const data = await response.json()
+      if (res.ok) {
+        const data = await res.json()
         
-        const keysToRemove = ["grc_token", "grc_username", "grc_role", "grc_avatar"]
-        keysToRemove.forEach(k => {
-          localStorage.removeItem(k)
-          sessionStorage.removeItem(k)
-        })
-        
-        // We no longer store data.token anywhere. The browser holds the cookie securely.
-        if (rememberMe) {
-          localStorage.setItem("grc_username", username)
+        if (values.rememberMe) {
+          localStorage.setItem("grc_username", values.username)
           localStorage.setItem("grc_role", data.role) 
           if (data.avatar) localStorage.setItem("grc_avatar", data.avatar) 
         } else {
-          sessionStorage.setItem("grc_username", username)
+          sessionStorage.setItem("grc_username", values.username)
           sessionStorage.setItem("grc_role", data.role) 
           if (data.avatar) sessionStorage.setItem("grc_avatar", data.avatar) 
         }
         
         onSignIn()
       } else {
-        setErrors({ password: "Invalid username or password." })
+        setServerError("Invalid username or password.")
       }
     } catch (error) {
       console.error("Login error:", error)
-      setErrors({ password: "Could not connect to the authentication server." })
-    } finally {
-      setIsSubmitting(false)
+      setServerError("Could not connect to the authentication server.")
     }
   }
 
@@ -135,60 +134,50 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <form className="flex flex-col gap-5" onSubmit={handleSubmit} noValidate>
+              <form className="flex flex-col gap-5" onSubmit={handleSubmit(onSubmit)} noValidate>
+                {serverError && <div className="p-3 text-sm rounded-md bg-destructive/15 text-destructive border border-destructive/20">{serverError}</div>}
+                
                 <div className="grid gap-2">
                   <Label htmlFor="login-username">Username</Label>
                   <Input
                     id="login-username"
-                    name="username"
                     type="text"
                     autoComplete="username"
                     placeholder="Enter your username"
-                    value={username}
                     disabled={isSubmitting}
                     aria-invalid={Boolean(errors.username)}
-                    aria-describedby={errors.username ? 'login-username-error' : undefined}
-                    onChange={(event) => {
-                      setUsername(event.target.value)
-                      if (errors.username) setErrors((current) => ({ ...current, username: undefined }))
-                    }}
+                    {...register("username")}
                   />
-                  {errors.username && <p id="login-username-error" className="text-sm text-destructive" role="alert">{errors.username}</p>}
+                  {errors.username && <p className="text-sm text-destructive" role="alert">{errors.username.message}</p>}
                 </div>
 
                 <div className="grid gap-2">
                   <div className="flex items-center justify-between gap-4">
                     <Label htmlFor="login-password">Password</Label>
-                    <button type="button" className="text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setErrors((current) => ({ ...current, password: 'Please contact your workspace administrator to reset your password.' }))}>
+                    <button type="button" className="text-sm font-medium text-primary outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setServerError('Please contact your workspace administrator to reset your password.')}>
                       Forgot password?
                     </button>
                   </div>
                   <div className="relative">
                     <Input
                       id="login-password"
-                      name="password"
                       type={showPassword ? 'text' : 'password'}
                       autoComplete="current-password"
                       placeholder="Enter your password"
-                      value={password}
                       disabled={isSubmitting}
                       className="pr-11"
                       aria-invalid={Boolean(errors.password)}
-                      aria-describedby={errors.password ? 'login-password-error' : undefined}
-                      onChange={(event) => {
-                        setPassword(event.target.value)
-                        if (errors.password) setErrors((current) => ({ ...current, password: undefined }))
-                      }}
+                      {...register("password")}
                     />
                     <button type="button" className="absolute right-1 top-1/2 flex size-9 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring" onClick={() => setShowPassword((visible) => !visible)} aria-label={showPassword ? 'Hide password' : 'Show password'}>
                       {showPassword ? <EyeOff className="size-4" aria-hidden /> : <Eye className="size-4" aria-hidden />}
                     </button>
                   </div>
-                  {errors.password && <p id="login-password-error" className="text-sm text-destructive" role="alert">{errors.password}</p>}
+                  {errors.password && <p className="text-sm text-destructive" role="alert">{errors.password.message}</p>}
                 </div>
 
                 <label className="flex w-fit cursor-pointer items-center gap-2 text-sm text-muted-foreground">
-                  <input type="checkbox" checked={rememberMe} disabled={isSubmitting} onChange={(event) => setRememberMe(event.target.checked)} className="size-4 rounded border-input accent-primary" />
+                  <input type="checkbox" disabled={isSubmitting} {...register("rememberMe")} className="size-4 rounded border-input accent-primary" />
                   Keep me signed in on this device
                 </label>
 

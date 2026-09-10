@@ -1,6 +1,9 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect } from "react"
+import { useForm } from "react-hook-form"
+import { zodResolver } from "@hookform/resolvers/zod"
+import { z } from "zod"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -28,6 +31,24 @@ import {
   type UserStatus,
 } from "@/lib/users"
 
+const userSchema = z.object({
+  name: z.string().min(1, "Full name is required"),
+  username: z.string().min(1, "Username is required"),
+  password: z.string().optional(),
+  role: z.enum([...USER_ROLES] as [string, ...string[]]),
+  status: z.enum([...USER_STATUSES] as [string, ...string[]]).optional(),
+}).superRefine((data, ctx) => {
+  if (data.password && data.password.length < 8) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Password must be at least 8 characters",
+      path: ["password"],
+    });
+  }
+});
+
+type UserFormValues = z.infer<typeof userSchema>
+
 interface UserFormDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -44,39 +65,69 @@ interface UserFormDialogProps {
 
 export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormDialogProps) {
   const isEdit = Boolean(user)
-  const [name, setName] = useState("")
-  const [username, setUsername] = useState("")
-  const [password, setPassword] = useState("")
-  const [role, setRole] = useState<UserRole>("Contributor")
-  const [status, setStatus] = useState<UserStatus>("Inactive")
 
-  // Prefill when editing, reset when creating.
+  const {
+    register,
+    handleSubmit,
+    setValue,
+    watch,
+    reset,
+    formState: { errors },
+  } = useForm<UserFormValues>({
+    resolver: zodResolver(userSchema),
+    defaultValues: {
+      name: "",
+      username: "",
+      password: "",
+      role: "Contributor",
+      status: "Inactive",
+    },
+  })
+
+  const currentRole = watch("role")
+  const currentStatus = watch("status")
+
   useEffect(() => {
     if (open) {
-      setName(user?.name ?? "")
-      setUsername(user?.username ?? "")
-      setPassword("")
-      setRole(user?.role ?? "Contributor")
-      setStatus(user?.status ?? "Inactive")
+      if (user) {
+        reset({
+          name: user.name ?? "",
+          username: user.username ?? "",
+          password: "",
+          role: user.role ?? "Contributor",
+          status: user.status ?? "Inactive",
+        })
+      } else {
+        reset({
+          name: "",
+          username: "",
+          password: "",
+          role: "Contributor",
+          status: "Inactive",
+        })
+      }
     }
-  }, [open, user])
+  }, [open, user, reset])
 
-  function handleSubmit(e: React.FormEvent) {
-    e.preventDefault()
-    if (!name.trim() || !username.trim() || (!isEdit && !password)) return
+  function handleFormSubmit(data: UserFormValues) {
+    if (!isEdit && !data.password) {
+      // Manual error if password is empty on create
+      return;
+    }
+    
     onSubmit({
-      name: name.trim(),
-      username: username.trim(),
-      password: password || undefined,
-      role,
-      status: isEdit ? status : undefined,
+      name: data.name,
+      username: data.username,
+      password: data.password || undefined,
+      role: data.role as UserRole,
+      status: isEdit ? (data.status as UserStatus) : undefined,
     })
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit(handleFormSubmit)}>
           <DialogHeader>
             <DialogTitle>{isEdit ? "Edit user" : "Create new user"}</DialogTitle>
             <DialogDescription>
@@ -91,47 +142,48 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
               <Label htmlFor="user-name">Full name</Label>
               <Input
                 id="user-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
                 placeholder="Full name"
-                required
+                aria-invalid={Boolean(errors.name)}
+                {...register("name")}
               />
+              {errors.name && <p className="text-sm text-destructive">{errors.name.message}</p>}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="user-username">Username</Label>
               <Input
                 id="user-username"
-                name="username"
                 type="text"
                 autoComplete="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
                 placeholder="Enter a username"
-                required
+                aria-invalid={Boolean(errors.username)}
+                {...register("username")}
               />
+              {errors.username && <p className="text-sm text-destructive">{errors.username.message}</p>}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="user-password">{isEdit ? "Change password" : "Password"}</Label>
               <Input
                 id="user-password"
-                name="password"
                 type="password"
                 autoComplete="new-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
                 placeholder={isEdit ? "Enter a new password" : "Create a password"}
-                minLength={8}
+                aria-invalid={Boolean(errors.password)}
+                {...register("password")}
                 required={!isEdit}
               />
-              <p className="text-xs text-muted-foreground">
-                {isEdit
-                  ? "Leave blank to keep the current password. New passwords require at least 8 characters."
-                  : "Use at least 8 characters."}
-              </p>
+              {errors.password ? (
+                <p className="text-sm text-destructive">{errors.password.message}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  {isEdit
+                    ? "Leave blank to keep the current password. New passwords require at least 8 characters."
+                    : "Use at least 8 characters."}
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label htmlFor="user-role">Role</Label>
-              <Select value={role} onValueChange={(v) => setRole(v as UserRole)}>
+              <Select value={currentRole} onValueChange={(v) => setValue("role", v)}>
                 <SelectTrigger id="user-role">
                   <SelectValue placeholder="Select a role" />
                 </SelectTrigger>
@@ -143,12 +195,13 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
                   ))}
                 </SelectContent>
               </Select>
-              <p className="text-xs text-muted-foreground text-pretty">{ROLE_DESCRIPTIONS[role]}</p>
+              {errors.role && <p className="text-sm text-destructive">{errors.role.message}</p>}
+              <p className="text-xs text-muted-foreground text-pretty">{ROLE_DESCRIPTIONS[currentRole as UserRole]}</p>
             </div>
             {isEdit && (
               <div className="grid gap-2">
                 <Label htmlFor="user-status">Status</Label>
-                <Select value={status} onValueChange={(value) => setStatus(value as UserStatus)}>
+                <Select value={currentStatus} onValueChange={(value) => setValue("status", value)}>
                   <SelectTrigger id="user-status">
                     <SelectValue placeholder="Select a status" />
                   </SelectTrigger>
@@ -160,6 +213,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
                     ))}
                   </SelectContent>
                 </Select>
+                {errors.status && <p className="text-sm text-destructive">{errors.status.message}</p>}
                 <p className="text-xs text-muted-foreground text-pretty">
                   Inactive users cannot access the workspace.
                 </p>

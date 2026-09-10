@@ -2,7 +2,14 @@ import datetime
 from django.utils import timezone
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework import exceptions
+from django.middleware.csrf import CsrfViewMiddleware
 from frameworks.models import ActiveSession, OrganizationSettings
+
+
+class CSRFCheck(CsrfViewMiddleware):
+    def _reject(self, request, reason):
+        return reason
 
 class ExpiringTokenAuthentication(TokenAuthentication):
     """
@@ -23,7 +30,23 @@ class ExpiringTokenAuthentication(TokenAuthentication):
         if not token_key:
             return None
             
-        return self.authenticate_credentials(token_key)
+        user_auth_tuple = self.authenticate_credentials(token_key)
+        
+        # 3. If authenticated via HttpOnly cookie, enforce CSRF
+        if request.COOKIES.get('grc_token'):
+            self.enforce_csrf(request)
+            
+        return user_auth_tuple
+
+    def enforce_csrf(self, request):
+        """
+        Enforce CSRF validation for session based authentication.
+        """
+        check = CSRFCheck(get_response=lambda r: None)
+        check.process_request(request)
+        reason = check.process_view(request, None, (), {})
+        if reason:
+            raise exceptions.PermissionDenied(f'CSRF Failed: {reason}')
 
     def authenticate_credentials(self, key):
         model = self.get_model()

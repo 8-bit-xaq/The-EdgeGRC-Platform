@@ -309,6 +309,12 @@ class UserSerializer(serializers.ModelSerializer):
         if request and request.FILES.get('avatar'):
             instance.profile.avatar = request.FILES['avatar']
             
+        try:
+            instance.profile.full_clean()
+        except Exception as e:
+            from rest_framework.exceptions import ValidationError as DRFValidationError
+            raise DRFValidationError({"avatar": str(e)})
+
         instance.profile.save()
         instance.save()
         return instance

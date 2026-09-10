@@ -67,6 +67,7 @@ chown -R www-data:www-data $INSTALL_DIR
 echo "[5/6] Installing background services..."
 cp $REPO_DIR/configs/grc-backend.service /etc/systemd/system/
 cp $REPO_DIR/configs/grc-frontend.service /etc/systemd/system/
+cp $REPO_DIR/configs/grc-worker.service /etc/systemd/system/
 
 # Create the Systemd SSL Watcher
 cat <<EOF > /etc/systemd/system/grc-ssl-watcher.path
@@ -92,12 +93,13 @@ EOF
 systemctl daemon-reload
 systemctl enable --now grc-backend
 systemctl enable --now grc-frontend
+systemctl enable --now grc-worker
 systemctl enable --now grc-ssl-watcher.path
 
 # --- ADD THIS NEW SECURITY BLOCK ---
 echo "Configuring strict least-privilege update permissions..."
 cat <<EOF > /etc/sudoers.d/grc-updater
-www-data ALL=(root) NOPASSWD: /bin/systemctl restart grc-backend, /bin/systemctl restart grc-frontend
+www-data ALL=(root) NOPASSWD: /bin/systemctl restart grc-backend, /bin/systemctl restart grc-frontend, /bin/systemctl restart grc-worker
 EOF
 
 # Sudoers files will be ignored if permissions are too open

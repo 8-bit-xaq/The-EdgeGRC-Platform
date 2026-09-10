@@ -323,19 +323,39 @@ export function WorkspaceSettings() {
     setIsBackingUp(true)
     try {
       const res = await fetchApi("backup/")
-      if (!res.ok) throw new Error("Backup failed")
-        
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a")
-      a.href = url
-      a.download = `grc_system_backup_${new Date().toISOString().replace(/[:.]/g, "-")}.zip`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
+      if (!res.ok) throw new Error("Backup request failed")
       
-      toast.success("Backup downloaded successfully.")
+      const data = await res.json()
+      if (data.task_id) {
+        let isComplete = false
+        while (!isComplete) {
+          await new Promise(r => setTimeout(r, 2000))
+          const statusRes = await fetchApi(`jobs/${data.task_id}/status/`)
+          if (statusRes.ok) {
+            const taskStatus = await statusRes.json()
+            if (taskStatus.status === "SUCCESS") {
+              isComplete = true
+              const downloadRes = await fetchApi(`jobs/${data.task_id}/download/`)
+              if (downloadRes.ok) {
+                const blob = await downloadRes.blob()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement("a")
+                a.href = url
+                a.download = `grc_system_backup_${new Date().toISOString().replace(/[:.]/g, "-")}.zip`
+                document.body.appendChild(a)
+                a.click()
+                document.body.removeChild(a)
+                URL.revokeObjectURL(url)
+                toast.success("Backup downloaded successfully.")
+              } else {
+                throw new Error("Download failed")
+              }
+            } else if (taskStatus.status === "FAILED") {
+              throw new Error("Task failed: " + taskStatus.error)
+            }
+          }
+        }
+      }
     } catch (err) {
       toast.error("Backup Failed", { description: "Could not generate the system snapshot." })
     } finally {
@@ -364,7 +384,7 @@ export function WorkspaceSettings() {
 
     try {
       const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-      const res = await fetch("/api/restore/", {
+      const res = await fetchApi("restore/", {
         method: "POST",
         headers: {
           "Authorization": `Token ${token}`
@@ -410,7 +430,7 @@ export function WorkspaceSettings() {
 
     try {
       const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-      const res = await fetch("/api/update/", {
+      const res = await fetchApi("update/", {
         method: "POST",
         headers: {
           "Authorization": `Token ${token}`

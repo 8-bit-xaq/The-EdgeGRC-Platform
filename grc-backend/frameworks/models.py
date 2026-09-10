@@ -10,32 +10,56 @@ import os
 import magic
 
 # --- FILE UPLOAD SECURITY ---
-SECURE_MIME_MAPPING = {
-    'pdf': ['application/pdf'],
-    'png': ['image/png'],
-    'jpg': ['image/jpeg'],
-    'jpeg': ['image/jpeg'],
-    'docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/zip'],
-    'xlsx': ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/zip'],
-    'csv': ['text/csv', 'text/plain'],
-    'txt': ['text/plain', 'inode/x-empty'] # Permits empty text files
-}
+import mimetypes
+mimetypes.add_type('application/vnd.ms-outlook', '.msg')
+mimetypes.add_type('message/rfc822', '.eml')
+mimetypes.add_type('application/x-x509-ca-cert', '.cer')
+mimetypes.add_type('application/x-pem-file', '.pem')
+mimetypes.add_type('application/pkcs8', '.key')
 
 def validate_secure_upload(upload):
-    """Validates that the file's extension strictly matches its cryptographic signature."""
-    ext = os.path.splitext(upload.name)[1].lower().strip('.')
-    
-    if ext not in SECURE_MIME_MAPPING:
-        raise ValidationError(f"Unsupported file extension: .{ext}")
-
+    """Validates that the file's extension loosely matches its cryptographic signature to prevent spoofing."""
     file_header = upload.read(2048)
     upload.seek(0) 
     
     real_mime_type = magic.from_buffer(file_header, mime=True)
-    allowed_mimes = SECURE_MIME_MAPPING[ext]
     
-    if real_mime_type not in allowed_mimes:
-        raise ValidationError(f"File spoofing detected. A .{ext} file should not contain '{real_mime_type}' data.")
+    if real_mime_type == 'inode/x-empty':
+        return
+        
+    expected_mime_type, _ = mimetypes.guess_type(upload.name)
+    
+    if not expected_mime_type:
+        return
+
+    if real_mime_type == expected_mime_type:
+        return
+
+    if expected_mime_type.startswith('text/'):
+        if real_mime_type.startswith('text/') or real_mime_type in ['application/json', 'application/xml', 'application/csv']:
+            return
+
+    if real_mime_type == 'application/zip' and expected_mime_type in [
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/epub+zip',
+        'application/java-archive',
+    ]:
+        return
+        
+    # Legacy MS Office formats
+    if expected_mime_type in ['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint']:
+        if real_mime_type in ['application/vnd.ms-office', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/CDFV2-corrupt']:
+            return
+            
+    if expected_mime_type == 'text/csv' and real_mime_type == 'text/plain':
+        return
+
+    ext = os.path.splitext(upload.name)[1].lower()
+    raise ValidationError(f"File spoofing detected. A {ext} file should not contain '{real_mime_type}' data.")
+
+
 
 # ----------------------------
 
@@ -239,7 +263,7 @@ class UserProfile(models.Model):
         ],
         default="Contributor"
     )
-    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True)
+    avatar = models.ImageField(upload_to='avatars/', null=True, blank=True, validators=[validate_secure_upload])
     
     # --- NOTIFICATION CHANNELS ---
     notify_assessments = models.BooleanField(default=False)

@@ -1,5 +1,7 @@
 from django.urls import path
 from .views import (
+    JobStatusView,
+    JobDownloadView,
     ControlListCreateView, 
     ControlDetailView, 
     ProofUploadView, 
@@ -59,4 +61,7 @@ urlpatterns = [
     path('factory-reset/', FactoryResetView.as_view(), name='factory-reset'),
     path('logout/', LogoutView.as_view(), name='api_logout'),
     path('verify-session/', VerifySessionView.as_view(), name='verify-session'),
+
+    path('jobs/<str:task_id>/status/', JobStatusView.as_view()),
+    path('jobs/<str:task_id>/download/', JobDownloadView.as_view()),
 ]

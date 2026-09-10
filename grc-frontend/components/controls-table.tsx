@@ -173,7 +173,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             if (proof.file) { 
               const formData = new FormData();
               formData.append('file', proof.file);
-              const uploadRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || "/api"}/controls/${updated.id}/proofs/`, {
+              const uploadRes = await fetchApi(`/controls/${updated.id}/proofs/`, {
                 method: "POST",
                 credentials: "include",
                 body: formData, 
