@@ -44,7 +44,18 @@ function extractControls(data: any): any[] {
   return [];
 }
 
-function normalizeControl(item: any, index: number) {
+function extractFrameworkName(data: any, fileName: string): string {
+  if (data && typeof data === "object") {
+    if (typeof data.framework === "string" && data.framework.trim()) return data.framework.trim();
+    if (typeof data.framework_name === "string" && data.framework_name.trim()) return data.framework_name.trim();
+    if (typeof data.title === "string" && data.title.trim()) return data.title.trim();
+    if (typeof data.name === "string" && data.name.trim()) return data.name.trim();
+  }
+  const clean = fileName.replace(/\.json$/i, "").replace(/[-_]/g, " ").trim();
+  return clean || "General Framework";
+}
+
+function normalizeControl(item: any, index: number, frameworkName: string) {
   const rawId = item.id || item.control_id || item.identifier || `CTRL-${index + 1}`;
   let parsedTags: string[] = [];
   if (Array.isArray(item.tags)) {
@@ -54,6 +65,7 @@ function normalizeControl(item: any, index: number) {
   }
   return {
     control_id: String(rawId),
+    framework: frameworkName,
     requirement_title: item.requirement_title || "",
     process_mechanism: item.process_mechanism || "",
     description: item.description || item.title || item.name || JSON.stringify(item),
@@ -107,7 +119,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
   const processFramework = useCallback(async () => {
     if (!file) return
     setStatus("processing")
-    setProgress(5) 
+    setProgress(15) 
 
     try {
       const fileContent = await file.text();
@@ -120,32 +132,32 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
         return
       }
 
-      setProgress(15);
-      let completed = 0;
+      const frameworkName = extractFrameworkName(parsed, file.name);
+      setProgress(45);
       const total = rawControls.length;
+      const normalizedControls = rawControls.map((raw, idx) => normalizeControl(raw, idx, frameworkName));
 
-      for (let i = 0; i < total; i++) {
-        const controlData = normalizeControl(rawControls[i], i);
-        // Cleaned up with fetchApi
-        const response = await fetchApi("controls/", {
-          method: "POST",
-          body: JSON.stringify(controlData),
-        });
+      setProgress(75);
 
-        if (!response.ok) console.error(`Failed to upload ${controlData.control_id}`);
+      const response = await fetchApi("controls/bulk-import/", {
+        method: "POST",
+        body: JSON.stringify({ framework: frameworkName, controls: normalizedControls }),
+      });
 
-        completed++;
-        setProgress(15 + (completed / total) * 85);
+      if (!response.ok) {
+        const errData = await response.json().catch(() => null);
+        throw new Error(errData?.error || "Failed to import framework controls.");
       }
 
+      setProgress(100);
       setControlCount(total);
       setStatus("success");
       onImported?.(total, file.name);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
       setStatus("error");
-      setErrorMessage("The file could not be processed or uploaded.");
+      setErrorMessage(error?.message || "The file could not be processed or uploaded.");
     }
   }, [file, onImported])
 

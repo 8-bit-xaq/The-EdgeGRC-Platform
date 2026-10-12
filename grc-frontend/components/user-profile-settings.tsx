@@ -138,46 +138,56 @@ export function UserProfileSettings() {
     e.preventDefault()
     if (!userId) return
 
-      const form = e.currentTarget as HTMLFormElement
-      const formData = new FormData(form)
+    const form = e.currentTarget as HTMLFormElement
+    const formData = new FormData(form)
 
-      const newPassword = formData.get("newPassword") as string
-      const confirmPassword = formData.get("confirmPassword") as string
+    const currentPassword = formData.get("currentPassword") as string
+    const newPassword = formData.get("newPassword") as string
+    const confirmPassword = formData.get("confirmPassword") as string
 
-      if (!newPassword || newPassword.length < 8) {
-        toast.error("Invalid password", { description: "Your new password must be at least 8 characters." })
-        return
-      }
+    if (!currentPassword) {
+      toast.error("Current password required", { description: "Please enter your current password." })
+      return
+    }
 
-      if (newPassword !== confirmPassword) {
-        toast.error("Passwords do not match", { description: "Ensure both new password fields match exactly." })
-        return
-      }
+    if (!newPassword || newPassword.length < 8) {
+      toast.error("Invalid password", { description: "Your new password must be at least 8 characters." })
+      return
+    }
 
-      setIsUpdatingPassword(true)
+    if (newPassword !== confirmPassword) {
+      toast.error("Passwords do not match", { description: "Ensure both new password fields match exactly." })
+      return
+    }
 
-      try {
-        const response = await fetchApi(`users/${userId}/`, {
-          method: "PATCH",
-          body: JSON.stringify({
-            password: newPassword
-          }),
+    setIsUpdatingPassword(true)
+
+    try {
+      const response = await fetchApi("users/change-password/", {
+        method: "POST",
+        body: JSON.stringify({
+          current_password: currentPassword,
+          new_password: newPassword
+        }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok) {
+        form.reset()
+        toast.success("Password changed", {
+          description: "Your password has been updated securely.",
         })
-
-        if (response.ok) {
-          form.reset()
-            toast.success("Password changed", {
-              description: "Use your new password the next time you sign in.",
-            })
-        } else {
-          toast.error("Failed to update password", { description: "You may not have permission to perform this action." })
-        }
-      } catch (error) {
-        console.error("Network error saving password:", error)
-        toast.error("Network error", { description: "Could not connect to the backend server." })
-      } finally {
-        setIsUpdatingPassword(false)
+      } else {
+        const errDesc = Array.isArray(data.error) ? data.error.join(" ") : (data.error || "Failed to update password.")
+        toast.error("Failed to update password", { description: errDesc })
       }
+    } catch (error) {
+      console.error("Network error saving password:", error)
+      toast.error("Network error", { description: "Could not connect to the backend server." })
+    } finally {
+      setIsUpdatingPassword(false)
+    }
   }
 
   async function toggleNotification(id: string, enabled: boolean) {

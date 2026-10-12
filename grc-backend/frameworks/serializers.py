@@ -137,6 +137,7 @@ class ControlSerializer(serializers.ModelSerializer):
         model = Control
         fields = [
             'control_id', 
+            'framework',
             'requirement_title', 
             'process_mechanism', 
             'description', 
@@ -252,6 +253,7 @@ class LogEntrySerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.CharField(source='profile.role', required=False)
     avatar = serializers.ImageField(source='profile.avatar', read_only=True)
+    must_change_password = serializers.BooleanField(source='profile.must_change_password', required=False)
     
     notify_assessments = serializers.BooleanField(source='profile.notify_assessments', required=False)
     notify_tasks = serializers.BooleanField(source='profile.notify_tasks', required=False)
@@ -261,16 +263,28 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'username', 'email', 'password', 'first_name', 'last_name', 
-            'is_active', 'role', 'avatar', 'notify_assessments', 'notify_tasks', 'notify_schedules'
+            'is_active', 'role', 'avatar', 'must_change_password', 'notify_assessments', 'notify_tasks', 'notify_schedules'
         ]
         extra_kwargs = {'password': {'write_only': True, 'required': False}}
 
     def create(self, validated_data):
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        password = validated_data.get('password')
+        if not password:
+            raise serializers.ValidationError({"password": ["A password is required when creating a user."]})
+
+        try:
+            validate_password(password)
+        except DjangoValidationError as e:
+            raise serializers.ValidationError({"password": list(e.messages)})
+
         profile_data = validated_data.pop('profile', {})
         user = User.objects.create_user(
             username=validated_data['username'],
             email=validated_data.get('email', ''),
-            password=validated_data.get('password'),
+            password=password,
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', '')
         )
@@ -278,6 +292,7 @@ class UserSerializer(serializers.ModelSerializer):
             user.is_active = validated_data['is_active']
         
         user.profile.role = profile_data.get('role', 'Contributor')
+        user.profile.must_change_password = profile_data.get('must_change_password', False)
         user.profile.notify_assessments = profile_data.get('notify_assessments', True)
         user.profile.notify_tasks = profile_data.get('notify_tasks', True)
         user.profile.notify_schedules = profile_data.get('notify_schedules', False)
@@ -287,17 +302,32 @@ class UserSerializer(serializers.ModelSerializer):
         return user
 
     def update(self, instance, validated_data):
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        request = self.context.get('request')
+        is_admin = request and (getattr(getattr(request.user, 'profile', None), 'role', '') == 'Admin' or request.user.is_superuser)
+
         profile_data = validated_data.pop('profile', {})
         
         if 'password' in validated_data:
-            instance.set_password(validated_data.pop('password'))
+            new_pw = validated_data.pop('password')
+            try:
+                validate_password(new_pw, user=instance)
+            except DjangoValidationError as e:
+                raise serializers.ValidationError({"password": list(e.messages)})
+            instance.set_password(new_pw)
             
         for attr, value in validated_data.items():
+            if attr == 'is_active' and not is_admin:
+                continue # Non-admins cannot deactivate/activate accounts
             setattr(instance, attr, value)
             
         if profile_data:
-            if 'role' in profile_data:
-                instance.profile.role = profile_data['role']
+            if 'role' in profile_data and is_admin:
+                instance.profile.role = profile_data['role'] # Only admins can change roles
+            if 'must_change_password' in profile_data and is_admin:
+                instance.profile.must_change_password = profile_data['must_change_password']
             if 'notify_assessments' in profile_data:
                 instance.profile.notify_assessments = profile_data['notify_assessments']
             if 'notify_tasks' in profile_data:
@@ -305,7 +335,6 @@ class UserSerializer(serializers.ModelSerializer):
             if 'notify_schedules' in profile_data:
                 instance.profile.notify_schedules = profile_data['notify_schedules']
             
-        request = self.context.get('request')
         if request and request.FILES.get('avatar'):
             instance.profile.avatar = request.FILES['avatar']
             

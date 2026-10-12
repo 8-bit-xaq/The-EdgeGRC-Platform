@@ -76,6 +76,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
   const queryClient = useQueryClient()
 
   const [query, setQuery] = useState("")
+  const [frameworkFilter, setFrameworkFilter] = useState<string>("All")
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All")
   const [designFilter, setDesignFilter] = useState<"All" | EffectivenessStatus>("All")
   const [operatingFilter, setOperatingFilter] = useState<"All" | EffectivenessStatus>("All")
@@ -106,6 +107,14 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
     }
   }, [targetFilter, onClearFilter])
 
+  const availableFrameworks = useMemo(() => {
+    const set = new Set<string>()
+    controls.forEach((c) => {
+      if (c.framework) set.add(c.framework)
+    })
+    return Array.from(set).sort()
+  }, [controls])
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return controls.filter((c) => {
@@ -114,15 +123,17 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         c.id.toLowerCase().includes(q) || 
         c.description.toLowerCase().includes(q) ||
         c.requirement_title?.toLowerCase().includes(q) ||
-        c.process_mechanism?.toLowerCase().includes(q)
+        c.process_mechanism?.toLowerCase().includes(q) ||
+        c.framework?.toLowerCase().includes(q)
       
+      const matchesFramework = frameworkFilter === "All" || c.framework === frameworkFilter
       const matchesStatus = statusFilter === "All" || c.status === statusFilter
       const matchesDesign = designFilter === "All" || c.control_effectiveness === designFilter
       const matchesOperating = operatingFilter === "All" || c.implementation_effectiveness === operatingFilter
 
-      return matchesQuery && matchesStatus && matchesDesign && matchesOperating
+      return matchesQuery && matchesFramework && matchesStatus && matchesDesign && matchesOperating
     })
-  }, [controls, query, statusFilter, designFilter, operatingFilter])
+  }, [controls, query, frameworkFilter, statusFilter, designFilter, operatingFilter])
 
   const groupedControls = useMemo(() => {
     const groups: Record<string, ComplianceControl[]> = {}
@@ -225,17 +236,33 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             />
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 bg-muted/40 border border-border rounded-lg p-1">
+          <div className="flex flex-wrap items-center gap-2 bg-muted/40 border border-border rounded-lg p-1.5">
             <div className="flex items-center gap-1.5 pl-2 pr-1">
               <ListFilter className="size-4 text-muted-foreground" aria-hidden />
               <span className="text-xs font-medium text-muted-foreground hidden xl:inline-block">Filter By:</span>
             </div>
 
+            {availableFrameworks.length > 0 && (
+              <Select value={frameworkFilter} onValueChange={setFrameworkFilter}>
+                <SelectTrigger className="min-w-[145px] w-auto h-7 bg-background text-xs" aria-label="Filter by framework">
+                  <SelectValue placeholder="Framework" />
+                </SelectTrigger>
+                <SelectContent className="min-w-[200px]">
+                  <SelectItem value="All">Framework: All</SelectItem>
+                  {availableFrameworks.map((fw) => (
+                    <SelectItem key={fw} value={fw}>
+                      {fw}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+
             <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as StatusFilter)}>
-              <SelectTrigger className="w-[145px] h-7 bg-background text-xs" aria-label="Filter by status">
+              <SelectTrigger className="min-w-[155px] w-auto h-7 bg-background text-xs" aria-label="Filter by status">
                 <SelectValue placeholder="Workflow Status" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="min-w-[220px]">
                 <SelectItem value="All">Status: All</SelectItem>
                 {CONTROL_STATUSES.map((status) => (
                   <SelectItem key={status} value={status}>
@@ -246,10 +273,10 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             </Select>
 
             <Select value={designFilter} onValueChange={(v) => setDesignFilter(v as "All" | EffectivenessStatus)}>
-              <SelectTrigger className="w-[145px] h-7 bg-background text-xs" aria-label="Filter by design evaluation">
+              <SelectTrigger className="min-w-[145px] w-auto h-7 bg-background text-xs" aria-label="Filter by design evaluation">
                 <SelectValue placeholder="Design Eval" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="min-w-[200px]">
                 <SelectItem value="All">Design: All</SelectItem>
                 {EFFECTIVENESS_STATUSES.map((status) => (
                   <SelectItem key={status} value={status}>
@@ -260,10 +287,10 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             </Select>
 
             <Select value={operatingFilter} onValueChange={(v) => setOperatingFilter(v as "All" | EffectivenessStatus)}>
-              <SelectTrigger className="w-[145px] h-7 bg-background text-xs" aria-label="Filter by operational evaluation">
+              <SelectTrigger className="min-w-[145px] w-auto h-7 bg-background text-xs" aria-label="Filter by operational evaluation">
                 <SelectValue placeholder="Operational Eval" />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="min-w-[200px]">
                 <SelectItem value="All">Operation: All</SelectItem>
                 {EFFECTIVENESS_STATUSES.map((status) => (
                   <SelectItem key={status} value={status}>
@@ -273,11 +300,12 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
               </SelectContent>
             </Select>
 
-            {(statusFilter !== "All" || designFilter !== "All" || operatingFilter !== "All") && (
+            {(frameworkFilter !== "All" || statusFilter !== "All" || designFilter !== "All" || operatingFilter !== "All") && (
               <Button 
                 variant="ghost" 
                 size="sm" 
                 onClick={() => {
+                  setFrameworkFilter("All")
                   setStatusFilter("All")
                   setDesignFilter("All")
                   setOperatingFilter("All")
@@ -348,7 +376,14 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                       return (
                         <TableRow key={control.id} className="bg-background">
                           <TableCell className="align-top font-mono text-sm font-medium pl-9">
-                            {control.id}
+                            <div>{control.id}</div>
+                            {control.framework && (
+                              <div className="mt-1">
+                                <Badge variant="outline" className="text-[10px] font-normal tracking-tight px-1.5 py-0 bg-muted/40 text-muted-foreground border-border max-w-[120px] truncate block" title={control.framework}>
+                                  {control.framework}
+                                </Badge>
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="whitespace-normal break-words text-pretty align-top text-muted-foreground">
                             {control.process_mechanism && (

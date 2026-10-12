@@ -9,9 +9,11 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { fetchApi } from '@/lib/api'
+import { useOrganization } from '@/lib/organization'
 
 interface LoginScreenProps {
-  onSignIn: () => void
+  onSignIn: (authData?: { must_change_password?: boolean; username?: string; role?: string; avatar?: string }) => void
 }
 
 const loginSchema = z.object({
@@ -23,6 +25,7 @@ const loginSchema = z.object({
 type LoginFormValues = z.infer<typeof loginSchema>
 
 export function LoginScreen({ onSignIn }: LoginScreenProps) {
+  const { organization } = useOrganization()
   const [showPassword, setShowPassword] = React.useState(false)
   const [serverError, setServerError] = React.useState<string | null>(null)
 
@@ -43,14 +46,12 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
     setServerError(null)
     
     try {
-      const res = await fetch("/api/login/", {
+      const res = await fetchApi("login/", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
         body: JSON.stringify({
           username: values.username,
-          password: values.password
+          password: values.password,
+          remember_me: values.rememberMe,
         })
       })
 
@@ -67,9 +68,12 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
           if (data.avatar) sessionStorage.setItem("grc_avatar", data.avatar) 
         }
         
-        onSignIn()
-      } else {
+        onSignIn(data)
+      } else if (res.status === 400) {
         setServerError("Invalid username or password.")
+      } else {
+        const errData = await res.json().catch(() => null)
+        setServerError(errData?.error || errData?.detail || `Server error (${res.status}). Please try again.`)
       }
     } catch (error) {
       console.error("Login error:", error)
@@ -81,12 +85,19 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
     <main className="min-h-screen bg-background lg:grid lg:grid-cols-[minmax(0,0.95fr)_minmax(32rem,1.05fr)]">
       <section className="relative hidden min-h-screen flex-col justify-between overflow-hidden border-r border-border bg-zinc-950 p-10 text-white dark:bg-muted/20 dark:text-foreground lg:flex xl:p-14">
         <div className="flex items-center gap-3">
-          <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-            <ShieldCheck className="size-6" aria-hidden />
+          <div className="flex size-10 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/5 dark:border-border dark:bg-muted/50">
+            {organization.logoDataUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={organization.logoDataUrl} alt={`${organization.companyName} logo`} className="size-full object-contain p-1" />
+            ) : (
+              <div className="flex size-full items-center justify-center bg-primary text-primary-foreground">
+                <ShieldCheck className="size-6" aria-hidden />
+              </div>
+            )}
           </div>
           <div>
-            <p className="text-sm font-semibold tracking-wide">Compliance Workspace</p>
-            <p className="text-xs text-zinc-400 dark:text-muted-foreground">Governance, Risk &amp; Compliance</p>
+            <p className="text-sm font-semibold tracking-wide">{organization.companyName || "Compliance Workspace"}</p>
+            <p className="text-xs text-zinc-400 dark:text-muted-foreground">{organization.workspaceName || "Governance, Risk & Compliance"}</p>
           </div>
         </div>
 
@@ -117,12 +128,19 @@ export function LoginScreen({ onSignIn }: LoginScreenProps) {
       <section className="flex min-h-screen items-center justify-center px-5 py-10 sm:px-8 lg:px-12">
         <div className="w-full max-w-md">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-              <ShieldCheck className="size-6" aria-hidden />
+            <div className="flex size-10 items-center justify-center overflow-hidden rounded-lg border border-border bg-background">
+              {organization.logoDataUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={organization.logoDataUrl} alt={`${organization.companyName} logo`} className="size-full object-contain p-1" />
+              ) : (
+                <div className="flex size-full items-center justify-center bg-primary text-primary-foreground">
+                  <ShieldCheck className="size-6" aria-hidden />
+                </div>
+              )}
             </div>
             <div>
-              <p className="text-sm font-semibold text-foreground">Compliance Workspace</p>
-              <p className="text-xs text-muted-foreground">Governance, Risk &amp; Compliance</p>
+              <p className="text-sm font-semibold text-foreground">{organization.companyName || "Compliance Workspace"}</p>
+              <p className="text-xs text-muted-foreground">{organization.workspaceName || "Governance, Risk & Compliance"}</p>
             </div>
           </div>
 

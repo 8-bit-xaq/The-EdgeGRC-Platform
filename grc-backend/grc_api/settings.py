@@ -26,14 +26,35 @@ if not secret_file.exists():
     secret_file.parent.mkdir(parents=True, exist_ok=True)
     secret_file.write_text(secrets.token_urlsafe(50))
 
+try:
+    os.chmod(secret_file, 0o600)
+except Exception:
+    pass
+
 SECRET_KEY = secret_file.read_text().strip()
 
 # 2. Disable Debug Mode for Production
 DEBUG = os.environ.get('DJANGO_DEBUG', 'False') == 'True'
 
 # 3. Restrict Allowed Hosts
-# Because Nginx handles the reverse proxying locally on the appliance, we can accept localhost.
-ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '*']
+# Nginx reverse-proxies locally. Allow loopback, edge-grc.local, and dynamically configured domains.
+ALLOWED_HOSTS = ['127.0.0.1', 'localhost', 'edge-grc.local']
+
+if os.environ.get('DJANGO_ALLOWED_HOSTS'):
+    ALLOWED_HOSTS.extend([h.strip() for h in os.environ.get('DJANGO_ALLOWED_HOSTS').split(',') if h.strip()])
+
+appliance_domain_file = BASE_DIR / 'configs' / 'appliance_domain.txt'
+if appliance_domain_file.exists():
+    for item in appliance_domain_file.read_text().replace(',', ' ').split():
+        item = item.strip()
+        if item and item not in ALLOWED_HOSTS:
+            ALLOWED_HOSTS.append(item)
+
+if DEBUG or os.environ.get('DJANGO_ALLOW_ALL_HOSTS', 'False') == 'True':
+    ALLOWED_HOSTS.append('*')
+
+# Trust X-Forwarded-Proto header from Nginx reverse proxy for SSL detection
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 
 # Application definition
@@ -96,6 +117,7 @@ DATABASES = {
         'NAME': BASE_DIR / 'db.sqlite3',
         'OPTIONS': {
             'timeout': 20,
+            'init_command': 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=20000;',
         }
     }
 }
@@ -149,15 +171,38 @@ REST_FRAMEWORK = {
         # Point to the new authentication.py file instead of views.py
         'frameworks.authentication.ExpiringTokenAuthentication',
     ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '120/minute',
+        'user': '1000/minute',
+        'login': '10/minute',
+    },
 }
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
-    "http://192.168.200.97:3000",
 ]
+if os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS'):
+    CORS_ALLOWED_ORIGINS.extend([origin.strip() for origin in os.environ.get('DJANGO_CORS_ALLOWED_ORIGINS').split(',') if origin.strip()])
 
 CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://localhost",
+    "https://127.0.0.1",
+]
+if os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS'):
+    CSRF_TRUSTED_ORIGINS.extend([origin.strip() for origin in os.environ.get('DJANGO_CSRF_TRUSTED_ORIGINS').split(',') if origin.strip()])
+
 Q_CLUSTER = {
     'name': 'grc_tasks',
     'workers': 4,
@@ -171,3 +216,64 @@ Q_CLUSTER = {
     'label': 'Django Q',
     'orm': 'default'
 }
+
+# --- PRODUCTION LOGGING ---
+LOGS_DIR = BASE_DIR / 'logs'
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '[{asctime}] {levelname} [{name}:{lineno}] {message}',
+            'style': '{',
+        },
+        'simple': {
+            'format': '{levelname} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': str(LOGS_DIR / 'grc-backend.log'),
+            'maxBytes': 10 * 1024 * 1024,  # 10 MB
+            'backupCount': 5,
+            'formatter': 'verbose',
+        },
+    },
+    'root': {
+        'handlers': ['console', 'file'],
+        'level': 'INFO',
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'django.request': {
+            'handlers': ['console', 'file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'frameworks': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+    },
+}
+
+# Production Cookie & Session Hardening
+if not DEBUG:
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_CONTENT_TYPE_NOSNIFF = True
+    X_FRAME_OPTIONS = 'DENY'
+

@@ -7,7 +7,9 @@ User=www-data
 Group=www-data
 WorkingDirectory=/opt/grc-appliance/grc-backend
 Environment="PATH=/opt/grc-appliance/grc-backend/venv/bin"
-ExecStart=/opt/grc-appliance/grc-backend/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:8000 grc_api.wsgi:application --reload
+ExecStart=/opt/grc-appliance/grc-backend/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:8000 grc_api.wsgi:application
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

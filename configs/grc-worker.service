@@ -9,6 +9,7 @@ WorkingDirectory=/opt/grc-appliance/grc-backend
 Environment="PATH=/opt/grc-appliance/grc-backend/venv/bin"
 ExecStart=/opt/grc-appliance/grc-backend/venv/bin/python manage.py qcluster
 Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

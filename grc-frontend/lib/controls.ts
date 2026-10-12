@@ -64,6 +64,7 @@ export interface AssessmentActivity {
 export interface ComplianceControl {
   id: string
   control_id: string
+  framework?: string
   requirement_title?: string
   process_mechanism?: string
   description: string

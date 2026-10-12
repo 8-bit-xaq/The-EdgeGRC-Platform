@@ -3,11 +3,15 @@
 import { useState, useEffect } from 'react'
 import { GrcApp } from '@/components/grc-app'
 import { LoginScreen } from '@/components/login-screen'
+import { ForcePasswordChangeModal } from '@/components/force-password-change-modal'
+import { SessionInactivityTracker } from '@/components/session-inactivity-tracker'
+import { ErrorBoundary } from '@/components/error-boundary'
 import { fetchApi } from '@/lib/api'
 
 export function DemoAuthGate() {
   const [isSignedIn, setIsSignedIn] = useState(false)
   const [isCheckingAuth, setIsCheckingAuth] = useState(true)
+  const [mustChangePassword, setMustChangePassword] = useState(false)
 
   useEffect(() => {
     async function verifyAuth() {
@@ -24,6 +28,7 @@ export function DemoAuthGate() {
           storage.setItem("grc_role", data.role)
           if (data.avatar) storage.setItem("grc_avatar", data.avatar)
           
+          setMustChangePassword(Boolean(data.must_change_password))
           setIsSignedIn(true)
         } else {
           setIsSignedIn(false)
@@ -50,16 +55,45 @@ export function DemoAuthGate() {
         localStorage.removeItem(k)
         sessionStorage.removeItem(k)
       })
+      setMustChangePassword(false)
       setIsSignedIn(false)
     }
   }
 
   // Prevent UI flash while the server verifies the session
-  if (isCheckingAuth) return null 
-
-  if (isSignedIn) {
-    return <GrcApp onLogout={handleLogout} />
+  if (isCheckingAuth) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-background">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    )
   }
 
-  return <LoginScreen onSignIn={() => setIsSignedIn(true)} />
+  if (isSignedIn) {
+    return (
+      <ErrorBoundary>
+        <GrcApp onLogout={handleLogout} />
+        <SessionInactivityTracker onLogout={handleLogout} />
+        {mustChangePassword && (
+          <ForcePasswordChangeModal
+            onPasswordChanged={() => setMustChangePassword(false)}
+            onLogout={handleLogout}
+          />
+        )}
+      </ErrorBoundary>
+    )
+  }
+
+  return (
+    <LoginScreen
+      onSignIn={(authData) => {
+        if (authData?.must_change_password) {
+          setMustChangePassword(true)
+        } else {
+          setMustChangePassword(false)
+        }
+        setIsSignedIn(true)
+      }}
+    />
+  )
 }

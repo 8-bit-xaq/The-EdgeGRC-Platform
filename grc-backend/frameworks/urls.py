@@ -25,13 +25,18 @@ from .views import (
     SystemUpdateView,
     HTTPSConfigurationView,
     OrganizationSettingsView,
+    FaviconView,
     FactoryResetView,
     LogoutView,
     VerifySessionView,
+    ChangePasswordView,
+    BulkControlImportView,
+    HealthCheckView,
 )
 
 urlpatterns = [
     path('controls/', ControlListCreateView.as_view()),
+    path('controls/bulk-import/', BulkControlImportView.as_view(), name='bulk-control-import'),
     path('controls/<str:control_id>/', ControlDetailView.as_view()),
     
     # Assessment & Test Plan endpoints
@@ -45,6 +50,7 @@ urlpatterns = [
     path('risks/<int:pk>/', RiskDetailView.as_view()),
     path('auditlogs/', AuditLogListView.as_view()),
     path('users/', UserCreateView.as_view()),
+    path('users/change-password/', ChangePasswordView.as_view(), name='change-password'),
     path('users/<int:pk>/', UserDetailView.as_view()),
     path('sessions/', ActiveSessionsView.as_view()),
     path('export/', ExportAuditPackageView.as_view()),
@@ -58,10 +64,13 @@ urlpatterns = [
     path('update/', SystemUpdateView.as_view()),
     path('system/https-config/', HTTPSConfigurationView.as_view(), name='https-config'),
     path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
+    path('organization/favicon/', FaviconView.as_view(), name='organization-favicon'),
+    path('organization/favicon', FaviconView.as_view()),
     path('factory-reset/', FactoryResetView.as_view(), name='factory-reset'),
     path('logout/', LogoutView.as_view(), name='api_logout'),
     path('verify-session/', VerifySessionView.as_view(), name='verify-session'),
 
     path('jobs/<str:task_id>/status/', JobStatusView.as_view()),
     path('jobs/<str:task_id>/download/', JobDownloadView.as_view()),
+    path('health/', HealthCheckView.as_view(), name='health-check'),
 ]

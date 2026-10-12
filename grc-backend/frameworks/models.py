@@ -18,7 +18,9 @@ mimetypes.add_type('application/x-pem-file', '.pem')
 mimetypes.add_type('application/pkcs8', '.key')
 
 def validate_secure_upload(upload):
-    """Validates that the file's extension loosely matches its cryptographic signature to prevent spoofing."""
+    """Validates that the file's extension loosely matches its cryptographic signature and scans for malware."""
+    scan_antivirus_if_available(upload)
+
     file_header = upload.read(2048)
     upload.seek(0) 
     
@@ -54,10 +56,49 @@ def validate_secure_upload(upload):
             return
             
     if expected_mime_type == 'text/csv' and real_mime_type == 'text/plain':
+        scan_antivirus_if_available(upload)
         return
 
     ext = os.path.splitext(upload.name)[1].lower()
     raise ValidationError(f"File spoofing detected. A {ext} file should not contain '{real_mime_type}' data.")
+
+
+def scan_antivirus_if_available(upload):
+    """
+    Scans upload using local ClamAV daemon socket (/var/run/clamav/clamd.ctl) if running.
+    Gracefully bypasses if ClamAV daemon is not present or offline.
+    """
+    socket_path = '/var/run/clamav/clamd.ctl'
+    if os.name == 'nt' or not os.path.exists(socket_path):
+        return
+
+    import socket
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(10.0)
+        s.connect(socket_path)
+        s.sendall(b'zINSTREAM\0')
+
+        upload.seek(0)
+        while True:
+            chunk = upload.read(8192)
+            if not chunk:
+                break
+            length = len(chunk).to_bytes(4, byteorder='big')
+            s.sendall(length + chunk)
+
+        s.sendall((0).to_bytes(4, byteorder='big'))
+        response = s.recv(1024).decode('utf-8', errors='ignore')
+        s.close()
+        upload.seek(0)
+
+        if 'FOUND' in response:
+            virus_name = response.split('FOUND')[0].strip()
+            raise ValidationError(f"Malware detected by appliance antivirus: {virus_name}. Upload rejected.")
+    except ValidationError:
+        raise
+    except Exception:
+        upload.seek(0)
 
 
 
@@ -77,6 +118,7 @@ class ActiveSession(models.Model):
 
 class Control(models.Model):
     control_id = models.CharField(max_length=50, unique=True)
+    framework = models.CharField(max_length=100, default="General", db_index=True)
     requirement_title = models.CharField(max_length=255, blank=True, null=True)
     process_mechanism = models.TextField(blank=True, null=True)
     description = models.TextField()
@@ -264,6 +306,7 @@ class UserProfile(models.Model):
         default="Contributor"
     )
     avatar = models.ImageField(upload_to='avatars/', null=True, blank=True, validators=[validate_secure_upload])
+    must_change_password = models.BooleanField(default=False)
     
     # --- NOTIFICATION CHANNELS ---
     notify_assessments = models.BooleanField(default=False)
@@ -498,14 +541,6 @@ def create_user_profile(sender, instance, created, **kwargs):
     if created:
         UserProfile.objects.create(user=instance)
 
-# --- AUDIT LOGGING ---
-auditlog.register(Control)
-auditlog.register(Proof)
-auditlog.register(Risk)
-auditlog.register(RemediationTask)
-auditlog.register(TestPlan)
-auditlog.register(AssessmentActivity)
-
 class OrganizationSettings(models.Model):
     company_name = models.CharField(max_length=255, default="Edge GRC")
     workspace_name = models.CharField(max_length=255, default="Compliance Solutions")
@@ -516,3 +551,51 @@ class OrganizationSettings(models.Model):
         # Force the ID to always be 1 so it acts as a global singleton
         self.pk = 1
         super().save(*args, **kwargs)
+
+# --- AUDIT LOGGING ---
+auditlog.register(Control)
+auditlog.register(Proof)
+auditlog.register(Risk)
+auditlog.register(RemediationTask)
+auditlog.register(TestPlan)
+auditlog.register(AssessmentActivity)
+auditlog.register(User, exclude_fields=['password'])
+auditlog.register(UserProfile)
+auditlog.register(OrganizationSettings)
+
+from auditlog.models import LogEntry
+import json
+
+@receiver(post_save, sender=LogEntry)
+def forward_audit_to_syslog(sender, instance, created, **kwargs):
+    """
+    Enterprise Compliance Requirement:
+    Forward all auditlog entries to the local syslog daemon (facility LOG_LOCAL4).
+    Enables streaming tamper-evident compliance audit records to SIEM solutions.
+    """
+    if not created:
+        return
+
+    try:
+        if os.name != 'nt':
+            import syslog
+            actor = instance.actor.username if instance.actor else 'System'
+            action_map = {0: 'CREATE', 1: 'UPDATE', 2: 'DELETE'}
+            action_str = action_map.get(instance.action, str(instance.action))
+
+            payload = {
+                'event': 'GRC_AUDIT_LOG',
+                'id': instance.id,
+                'timestamp': instance.timestamp.isoformat(),
+                'actor': actor,
+                'action': action_str,
+                'target_model': instance.content_type.model if instance.content_type else 'unknown',
+                'target_repr': instance.object_repr,
+                'changes': instance.changes,
+            }
+
+            syslog.openlog(ident='edge-grc-audit', logoption=syslog.LOG_PID, facility=syslog.LOG_LOCAL4)
+            syslog.syslog(syslog.LOG_INFO, json.dumps(payload))
+            syslog.closelog()
+    except Exception:
+        pass

@@ -126,8 +126,7 @@ export function GrcApp({ onLogout }: GrcAppProps) {
   if (isInitializing) return null
 
   return (
-    <OrganizationProvider>
-      <NotificationsProvider>
+    <NotificationsProvider>
         {showOnboarding ? (
           <OnboardingWizard onComplete={completeOnboarding} />
         ) : (
@@ -218,6 +217,5 @@ export function GrcApp({ onLogout }: GrcAppProps) {
           </div>
         )}
       </NotificationsProvider>
-    </OrganizationProvider>
-  )
-}
+    )
+  }

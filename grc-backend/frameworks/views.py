@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from .models import Control, Proof, Risk, RemediationTask, TestPlan, AssessmentActivity, Notification, ActiveSession
 from django.contrib.auth.models import User
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.authtoken.models import Token
 from .serializers import (
@@ -16,22 +16,30 @@ from auditlog.models import LogEntry
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.views import APIView
-from django.http import HttpResponse
+from django.http import HttpResponse, Http404, FileResponse
 from .models import OrganizationSettings
 from django.core.exceptions import ValidationError
 
 # --- NEW: Security & Authentication Imports ---
 from rest_framework.authentication import TokenAuthentication
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.throttling import ScopedRateThrottle
 # ----------------------------------------------
 
 import datetime
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
+
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from cryptography.exceptions import InvalidSignature
+
 from cryptography import x509
 from cryptography.x509.oid import NameOID
 import io
 import os
+import ipaddress
 import zipfile
 import json
 import base64
@@ -49,7 +57,11 @@ from .permissions import (
     ControlMatrixPermissions, 
     AssessmentPermissions, 
     TestPlanPermissions, 
-    EvidenceUploadPermissions
+    EvidenceUploadPermissions,
+    IsAdminOrSelf,
+    RiskPermissions,
+    RemediationTaskPermissions,
+    AuditLogPermissions
 )
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
@@ -88,7 +100,7 @@ class AssessmentActivityDetailView(generics.RetrieveUpdateDestroyAPIView):
 class RemediationTaskListCreateView(generics.ListCreateAPIView):
     queryset = RemediationTask.objects.all().order_by('-created_at')
     serializer_class = RemediationTaskSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, RemediationTaskPermissions]
 
     def perform_create(self, serializer):
         serializer.save(requested_by=self.request.user)
@@ -97,33 +109,40 @@ class RemediationTaskListCreateView(generics.ListCreateAPIView):
 class RemediationTaskDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = RemediationTask.objects.all()
     serializer_class = RemediationTaskSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, RemediationTaskPermissions]
 
 
 class RiskListCreateView(generics.ListCreateAPIView):
     queryset = Risk.objects.all().prefetch_related('mitigating_controls')
     serializer_class = RiskSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, RiskPermissions]
 
 
 class RiskDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Risk.objects.all()
     serializer_class = RiskSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [IsAuthenticated, RiskPermissions]
 
 
 class ControlListCreateView(generics.ListCreateAPIView):
-    queryset = Control.objects.prefetch_related(
-        'proofs',
-        'remediation_tasks',
-        'cross_walked_controls',
-        'cross_walked_controls__proofs',
-        'cross_walked_controls__remediation_tasks',
-        'mitigated_risks',
-        'assessments'
-    ).select_related('test_plan').all()
-    
+    permission_classes = [IsAuthenticated, IsAdminUserOrReadOnly]
     serializer_class = ControlSerializer
+
+    def get_queryset(self):
+        qs = Control.objects.prefetch_related(
+            'proofs',
+            'remediation_tasks',
+            'cross_walked_controls',
+            'cross_walked_controls__proofs',
+            'cross_walked_controls__remediation_tasks',
+            'mitigated_risks',
+            'assessments'
+        ).select_related('test_plan').all()
+
+        framework_param = self.request.query_params.get('framework')
+        if framework_param and framework_param != 'All':
+            qs = qs.filter(framework=framework_param)
+        return qs
 
 
 class ControlDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -176,6 +195,7 @@ class ProofDeleteView(generics.DestroyAPIView):
 
 
 class AuditLogListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated, AuditLogPermissions]
     queryset = LogEntry.objects.select_related('actor').order_by('-timestamp')
     serializer_class = LogEntrySerializer
 
@@ -189,12 +209,16 @@ class UserCreateView(generics.ListCreateAPIView):
 class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = User.objects.all()
     serializer_class = UserSerializer
+    permission_classes = [IsAuthenticated, IsAdminOrSelf]
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
 
 class CustomAuthToken(ObtainAuthToken):
     authentication_classes = []
     permission_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
+
     def post(self, request, *args, **kwargs):
         serializer = self.serializer_class(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
@@ -220,25 +244,28 @@ class CustomAuthToken(ObtainAuthToken):
         
         role = getattr(user.profile, 'role', 'Contributor') if hasattr(user, 'profile') else 'Contributor'
         avatar_url = request.build_absolute_uri(user.profile.avatar.url) if hasattr(user, 'profile') and user.profile.avatar else None
+        must_change_password = getattr(user.profile, 'must_change_password', False) if hasattr(user, 'profile') else False
 
         # Do NOT return the token in the JSON body
         get_token(request)
         response = Response({
             'username': user.username,
             'role': role,
-            'avatar': avatar_url
+            'avatar': avatar_url,
+            'must_change_password': must_change_password,
         })
         
         # Read the 'remember_me' flag passed from the frontend
         remember_me = request.data.get('remember_me', False)
         max_age = 14400 if remember_me else None # 4 hours or session-only
         
-        # Inject the secure HttpOnly cookie
+        # Inject the secure HttpOnly cookie (enforce Secure when request arrived over HTTPS)
+        is_secure_conn = request.is_secure() or (not settings.DEBUG and request.headers.get('x-forwarded-proto') == 'https')
         response.set_cookie(
             key='grc_token',
             value=token.key,
             httponly=True,
-            secure=not settings.DEBUG, # Enforces HTTPS in production
+            secure=is_secure_conn,
             samesite='Lax',
             max_age=max_age
         )
@@ -551,36 +578,72 @@ class SystemBackupView(APIView):
 
 
 def background_restore_task(zip_path):
-    import zipfile, os
+    import zipfile, os, shutil, tempfile, sqlite3
     from django.conf import settings
-    from django.db import connection
-    
+    from django.db import connections
+
+    temp_dir = tempfile.mkdtemp()
     try:
-        connection.close()
-        
+        connections.close_all()
+
         with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-            file_names = zip_ref.namelist()
-            db_path = settings.DATABASES['default']['NAME']
-            media_root = os.path.abspath(settings.MEDIA_ROOT)
-            
-            for name in file_names:
-                if name == 'db.sqlite3':
-                    with open(db_path, 'wb') as db_file:
-                        db_file.write(zip_ref.read(name))
-                elif name.startswith('media/'):
-                    rel_path = name.replace('media/', '', 1)
-                    if rel_path: 
-                        target_path = os.path.abspath(os.path.join(media_root, rel_path))
-                        if not target_path.startswith(media_root + os.path.sep):
-                            raise Exception(f"Security Violation: Path traversal attempt detected with file {name}")
-                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
-                        with open(target_path, 'wb') as media_file:
-                            media_file.write(zip_ref.read(name))
-                            
+            # Zip Slip mitigation check
+            for member in zip_ref.namelist():
+                member_path = os.path.abspath(os.path.join(temp_dir, member))
+                if not member_path.startswith(temp_dir + os.path.sep) and member_path != temp_dir:
+                    raise Exception(f"Security Violation: Path traversal attempt detected with file {member}")
+
+            zip_ref.extractall(temp_dir)
+
+        # 1. Database Integrity Verification & Atomic Replacement
+        extracted_db = os.path.join(temp_dir, 'db.sqlite3')
+        db_path = str(settings.DATABASES['default']['NAME'])
+
+        if os.path.exists(extracted_db):
+            # Verify database integrity before touching the live database
+            with sqlite3.connect(extracted_db) as test_conn:
+                test_cursor = test_conn.cursor()
+                test_cursor.execute("PRAGMA integrity_check;")
+                check_result = test_cursor.fetchone()
+                if not check_result or check_result[0] != 'ok':
+                    raise Exception(f"Database integrity verification failed: {check_result}")
+
+            # Close all active connections across all threads
+            connections.close_all()
+
+            # Clean up stale WAL and SHM files to prevent corruption on restart
+            for ext in ['-wal', '-shm']:
+                wal_f = db_path + ext
+                if os.path.exists(wal_f):
+                    try:
+                        os.remove(wal_f)
+                    except OSError:
+                        pass
+
+            shutil.copyfile(extracted_db, db_path)
+
+        # 2. Media Directory Restoration
+        extracted_media = os.path.join(temp_dir, 'media')
+        media_root = os.path.abspath(str(settings.MEDIA_ROOT))
+        if os.path.exists(extracted_media):
+            for folder_name, _, filenames in os.walk(extracted_media):
+                for filename in filenames:
+                    src_file = os.path.join(folder_name, filename)
+                    rel_path = os.path.relpath(src_file, extracted_media)
+                    dest_file = os.path.abspath(os.path.join(media_root, rel_path))
+                    if dest_file.startswith(media_root + os.path.sep):
+                        os.makedirs(os.path.dirname(dest_file), exist_ok=True)
+                        shutil.copyfile(src_file, dest_file)
+
         return {"status": "success"}
+
     finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
         if os.path.exists(zip_path):
-            os.remove(zip_path)
+            try:
+                os.remove(zip_path)
+            except OSError:
+                pass
 
 class SystemRestoreView(APIView):
     permission_classes = [IsAuthenticated]
@@ -657,7 +720,7 @@ def execute_system_update(zip_path, base_dir):
                 member_path = os.path.abspath(os.path.join(target_dir, member))
                 
                 # If the resolved path escapes our base_dir, it is a malicious payload
-                if not member_path.startswith(target_dir + os.path.sep):
+                if not member_path.startswith(target_dir + os.path.sep) and member_path != target_dir:
                     raise Exception(f"Security Violation: Path traversal attempt detected with file {member}")
             
             # If we make it through the loop without an exception, the archive is safe to extract
@@ -667,8 +730,15 @@ def execute_system_update(zip_path, base_dir):
         manage_path = os.path.join(backend_dir, 'manage.py')
         if os.path.exists(manage_path):
             subprocess.run([sys.executable, manage_path, 'migrate'], cwd=backend_dir, check=True)
+            try:
+                subprocess.run([sys.executable, manage_path, 'collectstatic', '--noinput'], cwd=backend_dir, check=True)
+            except Exception as cs_err:
+                print(f"Warning: collectstatic during system update encountered: {cs_err}")
             
-        subprocess.run(['sudo', 'systemctl', 'restart', 'grc-backend', 'grc-frontend', 'grc-worker'], check=True)
+        if os.name != 'nt':
+            systemctl_bin = '/bin/systemctl' if os.path.exists('/bin/systemctl') else '/usr/bin/systemctl'
+            restart_cmd = f"sleep 2 && sudo {systemctl_bin} restart grc-backend grc-frontend grc-worker"
+            subprocess.Popen(['nohup', 'sh', '-c', restart_cmd], start_new_session=True)
         
     except Exception as e:
         print(f"CRITICAL: System update failed: {e}")
@@ -698,9 +768,50 @@ class SystemUpdateView(APIView):
                 for chunk in file_obj.chunks():
                     dest.write(chunk)
             
-            threading.Thread(target=execute_system_update, args=(zip_path, '/opt/grc-appliance/')).start()
+            # --- Cryptographic Signature Verification ---
+            pub_key_path = os.path.join(settings.BASE_DIR, 'configs', 'update_pub.pem')
+            if not os.path.exists(pub_key_path):
+                # If key doesn't exist yet, we fail closed to prevent unsigned updates
+                return Response({"error": "Update public key not found. System cannot verify updates."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            with open(pub_key_path, 'rb') as f:
+                public_key = load_pem_public_key(f.read())
             
-            return Response({"status": "Update initiated. The system will apply changes and restart automatically."}, status=status.HTTP_200_OK)
+            payload_path = os.path.join(update_dir, 'payload.zip')
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as outer_zip:
+                    if 'payload.zip' not in outer_zip.namelist() or 'signature.sig' not in outer_zip.namelist():
+                        return Response({"error": "Invalid update package format. Must contain payload.zip and signature.sig."}, status=status.HTTP_400_BAD_REQUEST)
+                    
+                    with outer_zip.open('signature.sig') as sig_f:
+                        signature = sig_f.read()
+                        
+                    with outer_zip.open('payload.zip') as payload_f:
+                        payload_data = payload_f.read()
+                        
+                    # Verify signature
+                    public_key.verify(
+                        signature,
+                        payload_data,
+                        padding.PKCS1v15(),
+                        hashes.SHA256()
+                    )
+                    
+                    # Write the verified payload to disk
+                    with open(payload_path, 'wb') as f:
+                        f.write(payload_data)
+                        
+            except InvalidSignature:
+                return Response({"error": "Signature verification failed! The update is not trusted."}, status=status.HTTP_403_FORBIDDEN)
+            except zipfile.BadZipFile:
+                return Response({"error": "Uploaded file is not a valid ZIP archive."}, status=status.HTTP_400_BAD_REQUEST)
+            except Exception as e:
+                return Response({"error": f"Error parsing update package: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Execute with the VERIFIED payload path
+            threading.Thread(target=execute_system_update, args=(payload_path, '/opt/grc-appliance/')).start()
+            
+            return Response({"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."}, status=status.HTTP_200_OK)
             
         except Exception as e:
             return Response({"error": f"Failed to stage update: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -780,7 +891,18 @@ class HTTPSConfigurationView(APIView):
 
         subject = issuer = x509.Name(attributes)
 
-        cert = x509.CertificateBuilder().subject_name(
+        san_list = []
+        try:
+            ip = ipaddress.ip_address(common_name)
+            san_list.append(x509.IPAddress(ip))
+        except ValueError:
+            san_list.append(x509.DNSName(common_name))
+
+        # Always include localhost and 127.0.0.1 for local management
+        san_list.append(x509.DNSName('localhost'))
+        san_list.append(x509.IPAddress(ipaddress.ip_address('127.0.0.1')))
+
+        builder = x509.CertificateBuilder().subject_name(
             subject
         ).issuer_name(
             issuer
@@ -792,7 +914,12 @@ class HTTPSConfigurationView(APIView):
             timezone.now()
         ).not_valid_after(
             timezone.now() + datetime.timedelta(days=365)
-        ).sign(private_key, hashes.SHA256())
+        ).add_extension(
+            x509.SubjectAlternativeName(san_list),
+            critical=False
+        )
+
+        cert = builder.sign(private_key, hashes.SHA256())
 
         cert_pem = cert.public_bytes(serialization.Encoding.PEM)
         key_pem = private_key.private_bytes(
@@ -808,6 +935,7 @@ class HTTPSConfigurationView(APIView):
     listen 80;
     server_name {common_name};
     
+    server_tokens off;
     # Force HTTP to redirect to HTTPS
     return 301 https://$host$request_uri;
 }}
@@ -816,8 +944,17 @@ server {{
     listen 443 ssl;
     server_name {common_name};
 
-    # Allow large payloads for system updates and database restores
-    client_max_body_size 500M;
+    # Security: Hide Nginx version banner
+    server_tokens off;
+
+    # Baseline Security Headers
+    add_header X-Frame-Options "DENY" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+    # Restrict standard request body size to 25MB
+    client_max_body_size 25M;
 
     ssl_certificate /opt/grc-appliance/grc-backend/configs/ssl/appliance_cert.pem;
     ssl_certificate_key /opt/grc-appliance/grc-backend/configs/ssl/appliance_key.pem;
@@ -825,6 +962,31 @@ server {{
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     ssl_prefer_server_ciphers on;
+
+    # Allow large payloads exclusively for system updates and database restores
+    location /api/update/ {{
+        client_max_body_size 500M;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+    }}
+
+    location /api/restore/ {{
+        client_max_body_size 500M;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_connect_timeout 300s;
+        proxy_send_timeout 300s;
+    }}
 
     location /api/ {{
         proxy_pass http://127.0.0.1:8000;
@@ -840,7 +1002,20 @@ server {{
         proxy_send_timeout 300s;
     }}
     
+    location /static/ {{
+        alias /opt/grc-appliance/grc-backend/staticfiles/;
+    }}
+
     location /media/ {{
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }}
+
+    location /protected_media/ {{
+        internal;
         alias /opt/grc-appliance/grc-backend/media/;
     }}
 
@@ -872,7 +1047,10 @@ server {{
 
 
 class OrganizationSettingsView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get(self, request):
         obj, _ = OrganizationSettings.objects.get_or_create(pk=1)
@@ -908,6 +1086,33 @@ class OrganizationSettingsView(APIView):
             'session_timeout': obj.session_timeout
         })
 
+
+class FaviconView(APIView):
+    """
+    Dynamically serves the organization logo as the browser favicon.
+    Falls back to the default platform icon if no custom logo is uploaded.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        import base64
+        from django.http import HttpResponse, HttpResponseRedirect
+        
+        obj = OrganizationSettings.objects.filter(pk=1).first()
+        if obj and obj.logo_data_url and obj.logo_data_url.startswith('data:image'):
+            try:
+                header, encoded = obj.logo_data_url.split(',', 1)
+                mime_type = header.split(';')[0].replace('data:', '')
+                binary_data = base64.b64decode(encoded)
+                response = HttpResponse(binary_data, content_type=mime_type)
+                response['Cache-Control'] = 'no-cache, must-revalidate'
+                return response
+            except Exception:
+                pass
+                
+        return HttpResponseRedirect('/icon.svg')
+
 class VerifySessionView(APIView):
     """
     Validates the HttpOnly cookie/token on initial app load.
@@ -919,12 +1124,14 @@ class VerifySessionView(APIView):
         user = request.user
         role = getattr(user.profile, 'role', 'Contributor') if hasattr(user, 'profile') else 'Contributor'
         avatar_url = request.build_absolute_uri(user.profile.avatar.url) if hasattr(user, 'profile') and user.profile.avatar else None
+        must_change_password = getattr(user.profile, 'must_change_password', False) if hasattr(user, 'profile') else False
 
         get_token(request)
         return Response({
             'username': user.username,
             'role': role,
-            'avatar': avatar_url
+            'avatar': avatar_url,
+            'must_change_password': must_change_password,
         })
 from django_q.models import Task
 import mimetypes
@@ -935,10 +1142,25 @@ class JobStatusView(APIView):
     def get(self, request, task_id):
         try:
             task = Task.objects.get(id=task_id)
-            if task.success:
-                return Response({'status': 'SUCCESS', 'result': task.result})
-            else:
+            user_role = getattr(request.user.profile, 'role', '') if hasattr(request.user, 'profile') else ''
+            
+            # Role-based access control per task function
+            if task.func in ['frameworks.views.background_backup_task', 'frameworks.views.background_restore_task']:
+                if user_role != 'Admin' and not request.user.is_superuser:
+                    return Response({'error': 'Administrative access required.'}, status=status.HTTP_403_FORBIDDEN)
+            elif task.func == 'frameworks.views.background_audit_pdf_task':
+                if user_role not in ['Admin', 'Auditor', 'Executive'] and not request.user.is_superuser:
+                    return Response({'error': 'Insufficient privileges.'}, status=status.HTTP_403_FORBIDDEN)
+            elif user_role != 'Admin' and not request.user.is_superuser:
+                return Response({'error': 'Insufficient privileges.'}, status=status.HTTP_403_FORBIDDEN)
+
+            if task.success is True:
+                filename = task.result.get('filename') if isinstance(task.result, dict) else None
+                return Response({'status': 'SUCCESS', 'filename': filename})
+            elif task.success is False:
                 return Response({'status': 'FAILED', 'error': str(task.result)})
+            else:
+                return Response({'status': 'PENDING'})
         except Task.DoesNotExist:
             return Response({'status': 'PENDING'})
 
@@ -948,30 +1170,265 @@ class JobDownloadView(APIView):
     def get(self, request, task_id):
         try:
             task = Task.objects.get(id=task_id)
+            user_role = getattr(request.user.profile, 'role', '') if hasattr(request.user, 'profile') else ''
+            
+            # Role-based access control per task function
+            if task.func in ['frameworks.views.background_backup_task', 'frameworks.views.background_restore_task']:
+                if user_role != 'Admin' and not request.user.is_superuser:
+                    return Response({'error': 'Administrative access required.'}, status=status.HTTP_403_FORBIDDEN)
+            elif task.func == 'frameworks.views.background_audit_pdf_task':
+                if user_role not in ['Admin', 'Auditor', 'Executive'] and not request.user.is_superuser:
+                    return Response({'error': 'Insufficient privileges.'}, status=status.HTTP_403_FORBIDDEN)
+            elif user_role != 'Admin' and not request.user.is_superuser:
+                return Response({'error': 'Insufficient privileges.'}, status=status.HTTP_403_FORBIDDEN)
+
             if not task.success:
-                return Response({'error': 'Task failed'}, status=400)
+                return Response({'error': 'Task failed'}, status=status.HTTP_400_BAD_REQUEST)
                 
             result = task.result
             if not isinstance(result, dict) or 'file_path' not in result:
-                return Response({'error': 'Task does not contain a downloadable file'}, status=400)
+                return Response({'error': 'Task does not contain a downloadable file'}, status=status.HTTP_400_BAD_REQUEST)
                 
-            file_path = result['file_path']
-            filename = result['filename']
+            file_path = os.path.abspath(result['file_path'])
+            results_dir = os.path.abspath(RESULTS_DIR)
+            
+            # Prevent path traversal outside the results directory
+            if not file_path.startswith(results_dir + os.path.sep):
+                return Response({'error': 'Security violation: invalid file path.'}, status=status.HTTP_403_FORBIDDEN)
+
+            filename = result.get('filename', 'download')
             content_type = result.get('content_type', 'application/octet-stream')
             
             if not os.path.exists(file_path):
-                return Response({'error': 'File not found'}, status=404)
+                return Response({'error': 'File not found'}, status=status.HTTP_404_NOT_FOUND)
                 
             with open(file_path, 'rb') as f:
                 response = HttpResponse(f.read(), content_type=content_type)
                 response['Content-Disposition'] = f'attachment; filename="{filename}"'
                 
-            # Optional cleanup after download
+            # Safe cleanup after read
             try:
                 os.remove(file_path)
-            except:
+            except OSError:
                 pass
                 
             return response
         except Task.DoesNotExist:
-            return Response({'error': 'Task not found'}, status=404)
+            return Response({'error': 'Task not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+class ProtectedMediaView(APIView):
+    """
+    Secures media files (evidence proofs, test plan attachments, user avatars).
+    Enforces authentication via cookies or tokens and utilizes Nginx X-Accel-Redirect
+    for high-performance, zero-copy file delivery in production.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, path):
+        media_root = os.path.abspath(str(settings.MEDIA_ROOT))
+        target_path = os.path.abspath(os.path.join(media_root, path))
+
+        # Path traversal guard
+        if not target_path.startswith(media_root + os.path.sep) and target_path != media_root:
+            raise Http404("File not found")
+
+        if not os.path.exists(target_path) or os.path.isdir(target_path):
+            raise Http404("File not found")
+
+        content_type, _ = mimetypes.guess_type(target_path)
+        content_type = content_type or 'application/octet-stream'
+
+        if not settings.DEBUG:
+            response = HttpResponse()
+            response['Content-Type'] = content_type
+            response['X-Accel-Redirect'] = f'/protected_media/{path}'
+            return response
+        else:
+            return FileResponse(open(target_path, 'rb'), content_type=content_type)
+
+
+class ChangePasswordView(APIView):
+    """
+    Allows any authenticated user to securely update their own password.
+    Requires verification of the user's current password and validates the new
+    password against Django's configured password policies.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        from django.contrib.auth.password_validation import validate_password
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        current_password = request.data.get('current_password', '')
+        new_password = request.data.get('new_password', '')
+
+        if not current_password:
+            return Response({"error": "Current password is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not request.user.check_password(current_password):
+            return Response({"error": "Incorrect current password."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not new_password:
+            return Response({"error": "New password is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            validate_password(new_password, user=request.user)
+        except DjangoValidationError as e:
+            return Response({"error": list(e.messages)}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.set_password(new_password)
+        request.user.save()
+
+        if hasattr(request.user, 'profile'):
+            request.user.profile.must_change_password = False
+            request.user.profile.save()
+
+        # Keep current session authenticated by refreshing token
+        Token.objects.filter(user=request.user).delete()
+        token = Token.objects.create(user=request.user)
+
+        response = Response({"message": "Password changed successfully."})
+        is_secure_conn = request.is_secure() or (not settings.DEBUG and request.headers.get('x-forwarded-proto') == 'https')
+        response.set_cookie(
+            key='grc_token',
+            value=token.key,
+            httponly=True,
+            secure=is_secure_conn,
+            samesite='Lax'
+        )
+        return response
+
+
+class BulkControlImportView(APIView):
+    """
+    Atomic bulk import endpoint for compliance framework controls.
+    Processes the entire batch in a single database transaction, preventing
+    partial / corrupted framework states and eliminating hundreds of sequential HTTP calls.
+    """
+    permission_classes = [IsAuthenticated, IsAdminUserOrReadOnly]
+
+    def post(self, request):
+        controls_data = request.data.get('controls', [])
+        if not isinstance(controls_data, list) or len(controls_data) == 0:
+            return Response({"error": "A non-empty list of controls is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        from django.db import transaction
+        created_count = 0
+        updated_count = 0
+
+        batch_framework = str(request.data.get('framework', '')).strip() or "General"
+
+        try:
+            with transaction.atomic():
+                for c in controls_data:
+                    cid = str(c.get('control_id', '')).strip()
+                    if not cid:
+                        continue
+
+                    framework_val = str(c.get('framework', '')).strip() or batch_framework
+
+                    defaults = {
+                        'framework': framework_val,
+                        'requirement_title': c.get('requirement_title', ''),
+                        'description': c.get('description', ''),
+                        'process_mechanism': c.get('process_mechanism', ''),
+                        'testing_frequency': c.get('testing_frequency', 'None'),
+                        'tags': c.get('tags', []),
+                        'status': c.get('status', 'Not Evaluated'),
+                        'control_effectiveness': c.get('control_effectiveness', 'Not Tested'),
+                        'implementation_effectiveness': c.get('implementation_effectiveness', 'Not Tested'),
+                        'evidence': c.get('evidence', '')
+                    }
+
+                    _, created = Control.objects.update_or_create(
+                        control_id=cid,
+                        defaults=defaults
+                    )
+                    if created:
+                        created_count += 1
+                    else:
+                        updated_count += 1
+
+            return Response({
+                "message": f"Successfully processed {created_count + updated_count} controls.",
+                "created": created_count,
+                "updated": updated_count,
+                "total": created_count + updated_count
+            }, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response({"error": f"Failed to import controls: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class HealthCheckView(APIView):
+    """
+    Public health check endpoint for monitoring systems, load balancers,
+    and Nginx reverse proxy health checks.
+    Evaluates database connectivity, background worker readiness, and free disk capacity.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def get(self, request):
+        import shutil
+        from django.db import connection
+        from django_q.models import Schedule
+
+        components = {}
+        all_healthy = True
+
+        # 1. Database Connectivity & Integrity
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1;")
+                row = cursor.fetchone()
+                if row and row[0] == 1:
+                    components["database"] = {"status": "healthy"}
+                else:
+                    components["database"] = {"status": "unhealthy", "error": "Unexpected query response"}
+                    all_healthy = False
+        except Exception as e:
+            components["database"] = {"status": "unhealthy", "error": str(e)}
+            all_healthy = False
+
+        # 2. Disk Storage Check
+        try:
+            total, used, free = shutil.disk_usage(str(settings.BASE_DIR))
+            free_gb = round(free / (1024 ** 3), 2)
+            total_gb = round(total / (1024 ** 3), 2)
+            percent_used = round((used / total) * 100, 1)
+
+            disk_status = "healthy"
+            if free_gb < 0.5:
+                disk_status = "critical"
+                all_healthy = False
+            elif free_gb < 1.0 or percent_used > 90.0:
+                disk_status = "warning"
+
+            components["storage"] = {
+                "status": disk_status,
+                "free_gb": free_gb,
+                "total_gb": total_gb,
+                "percent_used": percent_used,
+            }
+        except Exception as e:
+            components["storage"] = {"status": "unhealthy", "error": str(e)}
+
+        # 3. Background Workers (Django Q)
+        try:
+            Schedule.objects.exists()
+            components["background_workers"] = {"status": "healthy"}
+        except Exception as e:
+            components["background_workers"] = {"status": "unhealthy", "error": str(e)}
+            all_healthy = False
+
+        response_status = status.HTTP_200_OK if all_healthy else status.HTTP_503_SERVICE_UNAVAILABLE
+        return Response({
+            "status": "healthy" if all_healthy else "degraded",
+            "timestamp": timezone.now().isoformat(),
+            "components": components,
+        }, status=response_status)
+
+
+

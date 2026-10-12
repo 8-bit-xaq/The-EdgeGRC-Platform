@@ -90,3 +90,67 @@ class EvidenceUploadPermissions(BasePermission):
             return True
         role = get_user_role(request)
         return role in ['Admin', 'Contributor']
+
+class IsAdminOrSelf(BasePermission):
+    """Allows full access to Admins, and read/update access to a user on their own User record."""
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated)
+
+    def has_object_permission(self, request, view, obj):
+        if get_user_role(request) == 'Admin' or request.user.is_superuser:
+            return True
+        if request.method in ['GET', 'PATCH', 'PUT'] and obj == request.user:
+            return True
+        return False
+
+class RiskPermissions(BasePermission):
+    """
+    - Admins, Auditors, Executives, Reviewers: Can create and update risks.
+    - Contributors: Read-only access.
+    - Admins: Only Admins can delete risks.
+    """
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        role = get_user_role(request)
+        return role in ['Admin', 'Auditor', 'Executive', 'Reviewer']
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = get_user_role(request)
+        if request.method == 'DELETE':
+            return role == 'Admin'
+        return role in ['Admin', 'Auditor', 'Executive', 'Reviewer']
+
+class RemediationTaskPermissions(BasePermission):
+    """
+    - Admins, Auditors, Reviewers: Can create tasks.
+    - Assigned user or Admins/Auditors/Reviewers: Can update status.
+    - Admins: Only Admins can delete tasks.
+    """
+    def has_permission(self, request, view):
+        if request.method in SAFE_METHODS:
+            return True
+        role = get_user_role(request)
+        return role in ['Admin', 'Auditor', 'Reviewer']
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = get_user_role(request)
+        if request.method == 'DELETE':
+            return role == 'Admin'
+        if role in ['Admin', 'Auditor', 'Reviewer']:
+            return True
+        if obj.assigned_to == request.user and request.method in ['PATCH', 'PUT']:
+            return True
+        return False
+
+class AuditLogPermissions(BasePermission):
+    """Restricts access to audit logs to Admins, Auditors, and Executives."""
+    def has_permission(self, request, view):
+        if not (request.user and request.user.is_authenticated):
+            return False
+        role = get_user_role(request)
+        return role in ['Admin', 'Auditor', 'Executive']

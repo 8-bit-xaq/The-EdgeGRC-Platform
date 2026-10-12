@@ -1,8 +1,8 @@
-import { Analytics } from '@vercel/analytics/next'
 import type { Metadata, Viewport } from 'next'
 import { Inter, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import { QueryProvider } from '@/components/query-provider' // <-- IMPORT THE PROVIDER
+import { OrganizationProvider } from '@/lib/organization'
 import './globals.css'
 
 const inter = Inter({
@@ -21,21 +21,8 @@ export const metadata: Metadata = {
     'Governance, Risk & Compliance platform for importing frameworks and managing compliance controls.',
   generator: 'v0.app',
   icons: {
-    icon: [
-      {
-        url: '/icon-light-32x32.png',
-        media: '(prefers-color-scheme: light)',
-      },
-      {
-        url: '/icon-dark-32x32.png',
-        media: '(prefers-color-scheme: dark)',
-      },
-      {
-        url: '/icon.svg',
-        type: 'image/svg+xml',
-      },
-    ],
-    apple: '/apple-icon.png',
+    icon: '/api/organization/favicon',
+    apple: '/api/organization/favicon',
   },
 }
 
@@ -55,11 +42,12 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} ${geistMono.variable} bg-background`}>
       <body className="font-sans antialiased">
-        {/* WRAP THE ENTIRE APP IN THE QUERY PROVIDER */}
+        {/* WRAP THE ENTIRE APP IN THE QUERY AND ORGANIZATION PROVIDERS */}
         <QueryProvider>
-          {children}
-          <Toaster position="bottom-right" />
-          {process.env.NODE_ENV === 'production' && <Analytics />}
+          <OrganizationProvider>
+            {children}
+            <Toaster position="bottom-right" />
+          </OrganizationProvider>
         </QueryProvider>
       </body>
     </html>
