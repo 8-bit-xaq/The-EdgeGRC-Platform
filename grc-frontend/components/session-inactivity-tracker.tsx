@@ -21,7 +21,7 @@ export function SessionInactivityTracker({ onLogout }: SessionInactivityTrackerP
 
   // Fetch configured timeout from organization settings
   useEffect(() => {
-    fetchApi("organization/")
+    fetchApi("organization")
       .then((res) => res.json())
       .then((data) => {
         if (data?.session_timeout && typeof data.session_timeout === "number") {

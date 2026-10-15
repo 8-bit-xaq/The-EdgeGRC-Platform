@@ -118,7 +118,7 @@ export function WorkspaceSettings() {
 
   // Fetch initial organization settings and session timeout from API on mount
   useEffect(() => {
-    fetchApi("organization/")
+    fetchApi("organization")
       .then((res) => res.json())
       .then((data) => {
         if (data.session_timeout) {
@@ -243,7 +243,7 @@ export function WorkspaceSettings() {
     if (sessionTimeout === "8 hours") timeoutMinutes = 480
 
     try {
-      const response = await fetchApi("organization/", {
+      const response = await fetchApi("organization", {
         method: "PUT",
         body: JSON.stringify({
           company_name: companyName.trim() || organization.companyName,

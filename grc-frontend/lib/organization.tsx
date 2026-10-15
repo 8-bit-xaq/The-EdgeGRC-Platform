@@ -46,7 +46,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
 
   // Fetch the global settings from the database on mount
   useEffect(() => {
-    fetchApi("organization/")
+    fetchApi("organization")
       .then(res => {
         if (res.ok) return res.json()
         throw new Error("Failed to fetch organization settings")
@@ -133,7 +133,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         } catch (e) {}
       }
 
-      fetchApi("organization/", {
+      fetchApi("organization", {
         method: "PUT",
         body: JSON.stringify({
           company_name: next.companyName,

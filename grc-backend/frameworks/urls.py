@@ -64,6 +64,7 @@ urlpatterns = [
     path('update/', SystemUpdateView.as_view()),
     path('system/https-config/', HTTPSConfigurationView.as_view(), name='https-config'),
     path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
+    path('organization', OrganizationSettingsView.as_view()),
     path('organization/favicon/', FaviconView.as_view(), name='organization-favicon'),
     path('organization/favicon', FaviconView.as_view()),
     path('factory-reset/', FactoryResetView.as_view(), name='factory-reset'),
