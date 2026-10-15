@@ -26,22 +26,48 @@ Edge-GRC is a high-performance, strictly on-premise Governance, Risk, and Compli
 
 ---
 
-## 🚀 Quick Start (End-User Installation)
+## 🚀 Quick Start (Installation)
 
-Edge-GRC is designed to be installed on a fresh **Ubuntu Linux (x86)** machine with a single command. 
+Edge-GRC is installed on a fresh **Ubuntu 20.04 / 22.04 / 24.04 LTS or Debian 11 / 12** machine.
 
-1. Clone or extract the release archive to your target machine.
-2. Run the automated installer with root privileges:
-   ```bash
-   sudo ./install.sh
-   ```
-3. The script will automatically install dependencies, compile the frontend, configure Nginx, generate initial security keys, and spin up the background workers.
-4. **Access the Appliance:** Navigate to `http://<your-ip-or-domain>`
-5. **Default Login:** 
-   * **Username:** `admin`
-   * **Password:** `ChangeMe123!`
+### Interactive Installation (Recommended)
+Run the guided installer with root privileges:
+```bash
+sudo ./install.sh
+```
+The installer will interactively prompt for:
+1. **Network Address:** Auto-detects your LAN IP or lets you set a custom domain.
+2. **Security & SSL:** Generates a 10-year self-signed TLS certificate for HTTPS out-of-the-box.
+3. **Administrator Credentials:** Auto-generates a secure 16-character password or accepts a custom password.
+4. **Firewall (UFW):** Automatically configures host ports (22 SSH, 80 HTTP, 443 HTTPS).
 
-*(Make sure to change the default password and configure HTTPS via the Workspace Settings immediately after your first login!)*
+### Automated / Headless Installation (DevOps & CI/CD)
+For automated deployments (cloud-init, Ansible, Terraform, Vagrant):
+```bash
+# Automated install with LAN IP and HTTPS:
+sudo ./install.sh -y --domain 192.168.1.150 --ssl
+
+# Full custom unattended deployment:
+sudo ./install.sh -y -d grc.company.local -p "YourSecurePassword123!" --ssl --skip-ufw
+```
+
+### Installer Options
+| Option | Description | Default |
+|---|---|---|
+| `-d, --domain <HOST>` | Domain or IP address for the appliance | Auto-detected LAN IP |
+| `-p, --admin-password <PASS>` | Set initial admin password | Random 16-char string |
+| `-e, --admin-email <EMAIL>` | Set initial admin email | `admin@<domain>` |
+| `--ssl` | Enable out-of-the-box self-signed HTTPS | Enabled (interactive default) |
+| `--skip-ssl` | Force HTTP-only mode on port 80 | Disabled |
+| `--skip-ufw` | Skip host firewall configuration | Disabled (UFW configured) |
+| `--skip-swap` | Skip 2GB swap file creation | Disabled (2GB swap enabled) |
+| `-y, --yes, --non-interactive` | Run non-interactively using defaults/flags | Interactive |
+| `-h, --help` | Display help documentation | - |
+
+**Initial Login Credentials:**
+* **Username:** `admin`
+* **Password:** Generated at install and saved to `/opt/grc-appliance/INITIAL_ADMIN_PASSWORD` (or your custom password).
+* *Note: A mandatory password change is enforced on first login.*
 
 ---
 
