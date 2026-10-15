@@ -71,29 +71,14 @@ sudo ./install.sh -y -d grc.company.local -p "YourSecurePassword123!" --ssl --sk
 
 ---
 
-## 🛠️ Vendor & Developer Guide
+## 🔄 Appliance Updates & Supply-Chain Security
 
-If you are maintaining the codebase or packaging updates for end-users, use the provided toolchain to ensure updates are cryptographically signed.
+Edge-GRC supports cryptographically verified updates directly through the Admin Console.
 
-### Generating Vendor Keys
-Before packaging your first update, you must generate a private/public keypair. The public key is bundled with the appliance, and the private key stays with you (the vendor).
-```bash
-cd grc-backend/
-python generate_update_keys.py
-```
-*This generates `configs/update_pub.pem` and `configs/vendor_private.pem`. **Never distribute the private key!***
-
-### Building an Update
-To package a new release for your on-prem clients, use the interactive build script:
-```bash
-./build-update.sh
-```
-1. The script will prompt you for the new Semantic Version (e.g., `1.1.0`).
-2. It will package the necessary application files into an intermediate `payload.zip`.
-3. It will automatically use your `vendor_private.pem` to generate an RSA signature (`signature.sig`).
-4. It will bundle both into `update-EdgeGRC.zip`.
-
-End-users can upload this final zip directly into their appliance UI. The appliance will mathematically verify the signature against its local public key before applying the patch.
+* **Cryptographic Signature Verification:** The appliance mathematically validates RSA-SHA256 signatures on all update packages against the embedded public key (`configs/update_pub.pem`) before extracting or applying files.
+* **Integrity Guarantee:** Any altered, corrupt, or unsigned update package is rejected before execution.
+* **Non-Destructive Patching:** System updates preserve existing SQLite databases, uploaded evidence files (`media/`), SSL certificates, and appliance domain configurations.
+* **Zero Downtime Database Migrations:** Database migrations and static asset collections run automatically during update application.
 
 ---
 

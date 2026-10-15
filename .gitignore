@@ -58,7 +58,8 @@ grc-backend/updates/
 grc-backend/backups/
 *.log
 
-# Packaging artifacts
+# Packaging tools & artifacts
+build-update.sh
 payload.zip
 update-*.zip
 *.zip
