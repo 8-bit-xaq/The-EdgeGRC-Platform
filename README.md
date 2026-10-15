@@ -61,6 +61,12 @@ sudo ./install.sh -y -d grc.company.local -p "YourSecurePassword123!" --ssl --sk
 | `--skip-ssl` | Force HTTP-only mode on port 80 | Disabled |
 | `--skip-ufw` | Skip host firewall configuration | Disabled (UFW configured) |
 | `--skip-swap` | Skip 2GB swap file creation | Disabled (2GB swap enabled) |
+| `--db <sqlite\|postgres>` | Database engine ('sqlite' or 'postgres') | `sqlite` |
+| `--db-host <HOST>` | PostgreSQL host address | `127.0.0.1` |
+| `--db-port <PORT>` | PostgreSQL port | `5432` |
+| `--db-name <NAME>` | PostgreSQL database name | `edgegrc` |
+| `--db-user <USER>` | PostgreSQL username | `edgegrc_user` |
+| `--db-password <PASS>` | PostgreSQL user password | Auto-generated 16-char |
 | `-y, --yes, --non-interactive` | Run non-interactively using defaults/flags | Interactive |
 | `-h, --help` | Display help documentation | - |
 
@@ -68,6 +74,41 @@ sudo ./install.sh -y -d grc.company.local -p "YourSecurePassword123!" --ssl --sk
 * **Username:** `admin`
 * **Password:** Generated at install and saved to `/opt/grc-appliance/INITIAL_ADMIN_PASSWORD` (or your custom password).
 * *Note: A mandatory password change is enforced on first login.*
+
+---
+
+## 🗄️ Pluggable Database Architecture (SQLite & PostgreSQL)
+
+Edge-GRC provides a pluggable database layer supporting two production architectures:
+
+1. **Embedded SQLite3 (Default):** Zero configuration, single-file embedded database tuned with Write-Ahead Logging (`WAL`), `busy_timeout=20000`, and automatic vacuuming. Recommended for standard on-premise appliances and isolated VMs.
+2. **PostgreSQL (Enterprise):** High-concurrency client-server relational database with persistent connection pooling (`CONN_MAX_AGE=60`). Supports automated local provisioning on the appliance host or connecting to external managed databases (AWS RDS, Azure Database for PostgreSQL, Google Cloud SQL, or corporate clusters).
+
+### Configuring PostgreSQL
+Database credentials can be configured via environment variables or stored securely in `/opt/grc-appliance/grc-backend/configs/db.env` (`chmod 600`, owned by `www-data`):
+```ini
+DB_ENGINE=postgres
+POSTGRES_DB=edgegrc
+POSTGRES_USER=edgegrc_user
+POSTGRES_PASSWORD=YourSecurePassword123!
+POSTGRES_HOST=127.0.0.1
+POSTGRES_PORT=5432
+```
+Alternatively, provide a unified connection URL:
+```ini
+DATABASE_URL=postgresql://edgegrc_user:YourSecurePassword123!@127.0.0.1:5432/edgegrc
+```
+
+### Seamless Migration from SQLite to PostgreSQL
+If you began on SQLite and wish to upgrade to PostgreSQL without data loss, run the built-in migration command:
+```bash
+cd /opt/grc-appliance/grc-backend
+source venv/bin/activate
+python manage.py migrate_to_postgres --host 127.0.0.1 --db edgegrc --user edgegrc_user --password "YourSecurePassword123!"
+sudo systemctl restart grc-backend grc-worker
+```
+The command automatically tests connectivity, dumps all existing frameworks, controls, and evidence records, builds the PostgreSQL schema, imports data, resets sequence counters, and writes `configs/db.env`.
+
 
 ---
 

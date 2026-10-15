@@ -7,3 +7,4 @@ reportlab
 gunicorn
 python-magic>=0.4.27
 django-q2>=1.6.1
+psycopg2-binary>=2.9.9

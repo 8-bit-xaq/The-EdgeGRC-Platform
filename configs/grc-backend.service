@@ -1,12 +1,13 @@
 [Unit]
 Description=GRC Backend Django Daemon
-After=network.target
+After=network.target postgresql.service
 
 [Service]
 User=www-data
 Group=www-data
 WorkingDirectory=/opt/grc-appliance/grc-backend
 Environment="PATH=/opt/grc-appliance/grc-backend/venv/bin"
+EnvironmentFile=-/opt/grc-appliance/grc-backend/configs/db.env
 ExecStart=/opt/grc-appliance/grc-backend/venv/bin/gunicorn --workers 3 --bind 127.0.0.1:8000 grc_api.wsgi:application
 Restart=always
 RestartSec=5

@@ -528,18 +528,38 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 def background_backup_task():
     import io, sqlite3, tempfile, zipfile
     from django.conf import settings
+    from django.db import connection
+    from django.core.management import call_command
+
     zip_buffer = io.BytesIO()
-    db_path = settings.DATABASES['default']['NAME']
     temp_fd, temp_db_path = tempfile.mkstemp(suffix='.sqlite3')
     os.close(temp_fd)
+
     try:
-        if os.path.exists(db_path):
-            with sqlite3.connect(db_path) as source_db:
-                with sqlite3.connect(temp_db_path) as dest_db:
-                    source_db.backup(dest_db)
         with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            if os.path.exists(temp_db_path):
-                zip_file.write(temp_db_path, arcname='db.sqlite3')
+            # 1. Database backup based on active engine
+            if connection.vendor == 'sqlite':
+                db_path = settings.DATABASES['default']['NAME']
+                if os.path.exists(db_path):
+                    with sqlite3.connect(db_path) as source_db:
+                        with sqlite3.connect(temp_db_path) as dest_db:
+                            source_db.backup(dest_db)
+                if os.path.exists(temp_db_path):
+                    zip_file.write(temp_db_path, arcname='db.sqlite3')
+
+            # Export universal portable database.json (works for PostgreSQL and cross-engine restores)
+            temp_json = temp_db_path + '.json'
+            try:
+                with open(temp_json, 'w', encoding='utf-8') as f:
+                    call_command('dumpdata', '--natural-foreign', '--natural-primary', exclude=['contenttypes', 'auth.permission'], stdout=f)
+                zip_file.write(temp_json, arcname='database.json')
+            except Exception as e:
+                print(f"Portable database dump warning: {e}")
+            finally:
+                if os.path.exists(temp_json):
+                    os.remove(temp_json)
+
+            # 2. Evidence media files
             media_root = settings.MEDIA_ROOT
             if os.path.exists(media_root):
                 for folder_name, subfolders, filenames in os.walk(media_root):
@@ -580,7 +600,8 @@ class SystemBackupView(APIView):
 def background_restore_task(zip_path):
     import zipfile, os, shutil, tempfile, sqlite3
     from django.conf import settings
-    from django.db import connections
+    from django.db import connection, connections
+    from django.core.management import call_command
 
     temp_dir = tempfile.mkdtemp()
     try:
@@ -595,12 +616,12 @@ def background_restore_task(zip_path):
 
             zip_ref.extractall(temp_dir)
 
-        # 1. Database Integrity Verification & Atomic Replacement
+        # 1. Database Integrity Verification & Replacement
         extracted_db = os.path.join(temp_dir, 'db.sqlite3')
-        db_path = str(settings.DATABASES['default']['NAME'])
+        extracted_json = os.path.join(temp_dir, 'database.json')
 
-        if os.path.exists(extracted_db):
-            # Verify database integrity before touching the live database
+        if connection.vendor == 'sqlite' and os.path.exists(extracted_db):
+            # Native SQLite Atomic Replacement
             with sqlite3.connect(extracted_db) as test_conn:
                 test_cursor = test_conn.cursor()
                 test_cursor.execute("PRAGMA integrity_check;")
@@ -608,10 +629,9 @@ def background_restore_task(zip_path):
                 if not check_result or check_result[0] != 'ok':
                     raise Exception(f"Database integrity verification failed: {check_result}")
 
-            # Close all active connections across all threads
             connections.close_all()
 
-            # Clean up stale WAL and SHM files to prevent corruption on restart
+            db_path = str(settings.DATABASES['default']['NAME'])
             for ext in ['-wal', '-shm']:
                 wal_f = db_path + ext
                 if os.path.exists(wal_f):
@@ -621,6 +641,23 @@ def background_restore_task(zip_path):
                         pass
 
             shutil.copyfile(extracted_db, db_path)
+
+        elif os.path.exists(extracted_json):
+            # Universal / PostgreSQL Loaddata Restoration
+            call_command('loaddata', extracted_json)
+
+            # In PostgreSQL, reset primary key sequence counters after bulk import
+            if connection.vendor == 'postgresql':
+                try:
+                    import io
+                    out = io.StringIO()
+                    call_command('sqlsequencereset', 'frameworks', 'auth', stdout=out)
+                    sql = out.getvalue()
+                    if sql:
+                        with connection.cursor() as cursor:
+                            cursor.execute(sql)
+                except Exception as seq_err:
+                    print(f"PostgreSQL sequence reset warning: {seq_err}")
 
         # 2. Media Directory Restoration
         extracted_media = os.path.join(temp_dir, 'media')

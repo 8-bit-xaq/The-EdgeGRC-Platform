@@ -26,6 +26,26 @@ log_warn()    { echo -e "  ${YELLOW}⚠${RESET} $1"; }
 log_error()   { echo -e "  ${RED}✖${RESET} $1"; }
 log_info()    { echo -e "  ${BLUE}ℹ${RESET} $1"; }
 
+# --- Default Configuration Variables ---
+APP_DOMAIN=""
+ADMIN_PASSWORD=""
+ADMIN_EMAIL=""
+CUSTOM_PASSWORD_PROVIDED=false
+ENABLE_SSL=true
+SSL_FLAG_SET=false
+ENABLE_UFW=true
+ENABLE_SWAP=true
+NON_INTERACTIVE=false
+UPGRADE_MODE=false
+DB_ENGINE="sqlite"
+POSTGRES_HOST="127.0.0.1"
+POSTGRES_PORT="5432"
+POSTGRES_DB="edgegrc"
+POSTGRES_USER="edgegrc_user"
+POSTGRES_PASSWORD=""
+POSTGRES_LOCAL=true
+DB_FLAG_SET=false
+
 # --- Help / Usage Menu ---
 show_help() {
     cat <<EOF
@@ -42,6 +62,12 @@ ${BOLD}Options:${RESET}
       --skip-ssl, --no-ssl     Disable SSL and install in HTTP-only mode (port 80)
       --skip-ufw, --no-ufw     Skip UFW host firewall configuration
       --skip-swap, --no-swap   Skip 2GB swap file creation
+      --db <sqlite|postgres>   Database engine: 'sqlite' or 'postgres' (default: sqlite)
+      --db-host <HOST>         PostgreSQL host (default: 127.0.0.1)
+      --db-port <PORT>         PostgreSQL port (default: 5432)
+      --db-name <NAME>         PostgreSQL database name (default: edgegrc)
+      --db-user <USER>         PostgreSQL user (default: edgegrc_user)
+      --db-password <PASS>     PostgreSQL user password
   -y, --yes, --non-interactive Run in automated unattended mode using defaults or provided flags
   -h, --help                   Display this help documentation and exit
 
@@ -49,11 +75,11 @@ ${BOLD}Examples:${RESET}
   # Interactive installation with guided menus:
   sudo ./install.sh
 
-  # Automated headless deployment (e.g., cloud-init / Ansible):
-  sudo ./install.sh -y --domain 192.168.1.150 --ssl
+  # Automated headless deployment with PostgreSQL:
+  sudo ./install.sh -y --domain 192.168.1.150 --ssl --db postgres
 
-  # Custom unattended deployment with pre-set password:
-  sudo ./install.sh -y -d grc.corp.local -p "Secur3P@ssw0rd!" --ssl --skip-ufw
+  # Custom unattended deployment with external PostgreSQL:
+  sudo ./install.sh -y -d grc.corp.local --db postgres --db-host db.corp.local --db-password "P@ss123" --ssl
 EOF
     exit 0
 }
@@ -105,6 +131,32 @@ while [[ $# -gt 0 ]]; do
         --skip-swap|--no-swap)
             ENABLE_SWAP=false
             shift
+            ;;
+        --db)
+            DB_ENGINE="$2"
+            DB_FLAG_SET=true
+            shift 2
+            ;;
+        --db-host)
+            POSTGRES_HOST="$2"
+            POSTGRES_LOCAL=false
+            shift 2
+            ;;
+        --db-port)
+            POSTGRES_PORT="$2"
+            shift 2
+            ;;
+        --db-name)
+            POSTGRES_DB="$2"
+            shift 2
+            ;;
+        --db-user)
+            POSTGRES_USER="$2"
+            shift 2
+            ;;
+        --db-password)
+            POSTGRES_PASSWORD="$2"
+            shift 2
             ;;
         -y|--yes|--non-interactive)
             NON_INTERACTIVE=true
@@ -183,7 +235,7 @@ fi
 # --- Interactive Configuration Menu ---
 if [ "$NON_INTERACTIVE" = false ]; then
     echo ""
-    echo -e "${BOLD}${BLUE}--- [Step 1/4] Network & Domain Configuration ---${RESET}"
+    echo -e "${BOLD}${BLUE}--- [Step 1/5] Network & Domain Configuration ---${RESET}"
     if [ -z "$APP_DOMAIN" ]; then
         echo -e "Choose how clients will access this appliance:"
         if [ -n "$PRIMARY_IP" ]; then
@@ -212,7 +264,7 @@ if [ "$NON_INTERACTIVE" = false ]; then
     fi
 
     echo ""
-    echo -e "${BOLD}${BLUE}--- [Step 2/4] Security & SSL / HTTPS ---${RESET}"
+    echo -e "${BOLD}${BLUE}--- [Step 2/5] Security & SSL / HTTPS ---${RESET}"
     if [ "$SSL_FLAG_SET" = false ]; then
         echo -e "Enable Self-Signed HTTPS out of the box? (Port 443 with modern TLS)"
         read -rp "Enable HTTPS now? [Y/n] (default: Y): " SSL_INPUT
@@ -228,7 +280,56 @@ if [ "$NON_INTERACTIVE" = false ]; then
     fi
 
     echo ""
-    echo -e "${BOLD}${BLUE}--- [Step 3/4] Administrator Account ---${RESET}"
+    echo -e "${BOLD}${BLUE}--- [Step 3/5] Pluggable Database Architecture ---${RESET}"
+    if [ "$DB_FLAG_SET" = false ] && [ "$UPGRADE_MODE" = false ]; then
+        echo -e "Choose the database architecture for this appliance:"
+        echo -e "  1) Embedded SQLite3 (Zero configuration, high-concurrency WAL mode) [Recommended]"
+        echo -e "  2) PostgreSQL (Enterprise, high-concurrency local server or remote cluster)"
+        read -rp "Select database engine [1-2] (default: 1): " DB_CHOICE
+        if [ "$DB_CHOICE" = "2" ]; then
+            DB_ENGINE="postgres"
+            echo -e "Configure PostgreSQL deployment:"
+            echo -e "  1) Automated Local PostgreSQL (installs & manages PostgreSQL on this host)"
+            echo -e "  2) External / Remote PostgreSQL (AWS RDS, Azure, or remote server)"
+            read -rp "Select option [1-2] (default: 1): " PG_CHOICE
+            if [ "$PG_CHOICE" = "2" ]; then
+                POSTGRES_LOCAL=false
+                read -rp "Enter PostgreSQL Host [127.0.0.1]: " PG_H
+                POSTGRES_HOST=${PG_H:-127.0.0.1}
+                read -rp "Enter PostgreSQL Port [5432]: " PG_P
+                POSTGRES_PORT=${PG_P:-5432}
+                read -rp "Enter Database Name [edgegrc]: " PG_D
+                POSTGRES_DB=${PG_D:-edgegrc}
+                read -rp "Enter Database User [edgegrc_user]: " PG_U
+                POSTGRES_USER=${PG_U:-edgegrc_user}
+                read -rsp "Enter Database Password: " PG_PW
+                echo ""
+                POSTGRES_PASSWORD="$PG_PW"
+            else
+                POSTGRES_LOCAL=true
+                POSTGRES_HOST="127.0.0.1"
+                POSTGRES_PORT="5432"
+                POSTGRES_DB="edgegrc"
+                POSTGRES_USER="edgegrc_user"
+                POSTGRES_PASSWORD=$(openssl rand -base64 16)
+            fi
+            log_info "Selected: PostgreSQL (${POSTGRES_USER}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB})"
+        else
+            DB_ENGINE="sqlite"
+            log_info "Selected: Embedded SQLite3 (WAL mode)"
+        fi
+    elif [ "$UPGRADE_MODE" = true ]; then
+        if [ -f "$INSTALL_DIR/grc-backend/configs/db.env" ]; then
+            DB_ENGINE="postgres"
+            log_info "Upgrade mode: Preserving existing PostgreSQL configuration."
+        else
+            DB_ENGINE="sqlite"
+            log_info "Upgrade mode: Preserving existing SQLite database."
+        fi
+    fi
+
+    echo ""
+    echo -e "${BOLD}${BLUE}--- [Step 4/5] Administrator Account ---${RESET}"
     if [ "$CUSTOM_PASSWORD_PROVIDED" = false ] && [ "$UPGRADE_MODE" = false ]; then
         echo -e "Select initial Administrator credentials:"
         echo -e "  1) Auto-generate a secure 16-character password [Recommended]"
@@ -260,7 +361,7 @@ if [ "$NON_INTERACTIVE" = false ]; then
     fi
 
     echo ""
-    echo -e "${BOLD}${BLUE}--- [Step 4/4] Host Firewall (UFW) ---${RESET}"
+    echo -e "${BOLD}${BLUE}--- [Step 5/5] Host Firewall (UFW) ---${RESET}"
     read -rp "Configure host firewall (UFW) to allow SSH(22), HTTP(80), and HTTPS(443)? [Y/n] (default: Y): " UFW_INPUT
     if [[ "$UFW_INPUT" =~ ^[Nn] ]]; then
         ENABLE_UFW=false
@@ -280,6 +381,7 @@ if [ "$NON_INTERACTIVE" = false ]; then
         echo -e "  Alternate LAN IP:   ${CYAN}${PRIMARY_IP}${RESET}"
     fi
     echo -e "  HTTPS / SSL:        $([ "$ENABLE_SSL" = true ] && echo -e "${GREEN}Enabled (Port 443)${RESET}" || echo -e "${YELLOW}Disabled (Port 80 HTTP)${RESET}")"
+    echo -e "  Database Engine:    $([ "$DB_ENGINE" = "postgres" ] || [ "$DB_ENGINE" = "postgresql" ] && echo -e "${GREEN}PostgreSQL (${POSTGRES_USER}@${POSTGRES_HOST}:${POSTGRES_PORT}/${POSTGRES_DB})${RESET}" || echo -e "${CYAN}Embedded SQLite3 (WAL mode)${RESET}")"
     echo -e "  Admin Account:      admin (${ADMIN_EMAIL})"
     echo -e "  Admin Password:     $([ "$CUSTOM_PASSWORD_PROVIDED" = true ] && echo -e "${GREEN}Custom specified${RESET}" || echo -e "${CYAN}Auto-generated (saved to file)${RESET}")"
     echo -e "  UFW Firewall:       $([ "$ENABLE_UFW" = true ] && echo -e "${GREEN}Enabled (22, 80, 443)${RESET}" || echo -e "${YELLOW}Skipped${RESET}")"
@@ -294,6 +396,9 @@ else
     # Non-interactive fallback defaults
     APP_DOMAIN=${APP_DOMAIN:-${PRIMARY_IP:-edge-grc.local}}
     ADMIN_EMAIL=${ADMIN_EMAIL:-admin@${APP_DOMAIN}}
+    if [ "$DB_ENGINE" = "postgres" ] && [ -z "$POSTGRES_PASSWORD" ]; then
+        POSTGRES_PASSWORD=$(openssl rand -base64 16)
+    fi
 fi
 
 # ==============================================================================
@@ -302,7 +407,12 @@ fi
 log_step "1/6" "Installing operating system dependencies..."
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq python3-pip python3-venv python3-dev nginx curl unzip zip openssl libmagic1 ufw fail2ban unattended-upgrades logrotate >/dev/null
+PKGS="python3-pip python3-venv python3-dev nginx curl unzip zip openssl libmagic1 ufw fail2ban unattended-upgrades logrotate"
+if [ "$DB_ENGINE" = "postgres" ] || [ "$DB_ENGINE" = "postgresql" ]; then
+    PKGS="$PKGS postgresql postgresql-contrib libpq-dev"
+fi
+apt-get install -y -qq $PKGS >/dev/null
+log_success "Base Linux packages installed."
 log_success "Base Linux packages installed."
 
 # Configure Swap if enabled and system swap < 1GB
@@ -426,6 +536,34 @@ source venv/bin/activate
 pip install -q --upgrade pip
 pip install -q -r requirements.txt
 pip install -q gunicorn
+
+# Configure Pluggable Database (PostgreSQL / SQLite)
+if [ "$DB_ENGINE" = "postgres" ] || [ "$DB_ENGINE" = "postgresql" ]; then
+    if [ "$POSTGRES_LOCAL" = true ]; then
+        log_info "Configuring local PostgreSQL service..."
+        systemctl enable --now postgresql >/dev/null 2>&1 || true
+        sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'" 2>/dev/null | grep -q 1 || \
+            sudo -u postgres psql -c "CREATE USER ${POSTGRES_USER} WITH PASSWORD '${POSTGRES_PASSWORD}';" >/dev/null 2>&1
+        sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" 2>/dev/null | grep -q 1 || \
+            sudo -u postgres psql -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};" >/dev/null 2>&1
+        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO ${POSTGRES_USER};" >/dev/null 2>&1
+        log_success "Local PostgreSQL service active and database '${POSTGRES_DB}' provisioned."
+    fi
+
+    DB_ENV_FILE="$INSTALL_DIR/grc-backend/configs/db.env"
+    cat <<DBEOF > "$DB_ENV_FILE"
+# Edge-GRC Pluggable Database Configuration
+DB_ENGINE=postgres
+POSTGRES_DB=${POSTGRES_DB}
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+POSTGRES_HOST=${POSTGRES_HOST}
+POSTGRES_PORT=${POSTGRES_PORT}
+DBEOF
+    chmod 600 "$DB_ENV_FILE"
+    chown www-data:www-data "$DB_ENV_FILE"
+    log_success "Database environment credentials saved to ${DB_ENV_FILE}."
+fi
 
 # Run Migrations & Collect Static Assets
 python manage.py migrate --noinput
@@ -838,6 +976,18 @@ else
     ALL_SERVICES_OK=false
 fi
 
+if [ "$DB_ENGINE" = "postgres" ] || [ "$DB_ENGINE" = "postgresql" ]; then
+    if [ "$POSTGRES_LOCAL" = true ]; then
+        CHECK_PG=$(systemctl is-active postgresql 2>/dev/null || echo "failed")
+        if [ "$CHECK_PG" = "active" ]; then
+            log_success "postgresql is active (Database Service)"
+        else
+            log_error "postgresql service status: ${CHECK_PG}"
+            ALL_SERVICES_OK=false
+        fi
+    fi
+fi
+
 # Determine Access Protocol
 PROTO="http"
 [ "$ENABLE_SSL" = true ] && PROTO="https"
@@ -867,6 +1017,7 @@ else
 fi
 
 echo -e "\n  ${BOLD}Appliance Status:${RESET}        $([ "$ALL_SERVICES_OK" = true ] && echo -e "${GREEN}All Core Services Healthy [✔]${RESET}" || echo -e "${YELLOW}Review Service Status Above [⚠]${RESET}")"
+echo -e "  ${BOLD}Database Engine:${RESET}         $([ "$DB_ENGINE" = "postgres" ] || [ "$DB_ENGINE" = "postgresql" ] && echo -e "${GREEN}PostgreSQL (${POSTGRES_DB})${RESET}" || echo -e "${CYAN}Embedded SQLite3 (WAL mode)${RESET}")"
 echo -e "  ${BOLD}SSL Certificate:${RESET}         $([ "$ENABLE_SSL" = true ] && echo -e "Self-Signed TLS (manageable in Admin Console)" || echo -e "Disabled (HTTP)")"
 
 echo -e "\n  ${BOLD}Useful Administrative Commands:${RESET}"

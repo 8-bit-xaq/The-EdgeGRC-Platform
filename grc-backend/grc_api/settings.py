@@ -108,19 +108,68 @@ TEMPLATES = [
 WSGI_APPLICATION = 'grc_api.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
+# Database Configuration (Pluggable: SQLite & PostgreSQL)
+# Reads from environment variables, systemd EnvironmentFile, or optional configs/db.env
 
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-        'OPTIONS': {
-            'timeout': 20,
-            'init_command': 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=20000;',
+db_env_file = BASE_DIR / 'configs' / 'db.env'
+if db_env_file.exists():
+    try:
+        with open(db_env_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    k, v = k.strip(), v.strip().strip("'\"")
+                    if k not in os.environ:
+                        os.environ[k] = v
+    except Exception:
+        pass
+
+DB_ENGINE = os.environ.get('DB_ENGINE', '').lower()
+DATABASE_URL = os.environ.get('DATABASE_URL', '')
+
+if DATABASE_URL.startswith(('postgres://', 'postgresql://')):
+    import urllib.parse
+    parsed_db = urllib.parse.urlparse(DATABASE_URL)
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': parsed_db.path.lstrip('/'),
+            'USER': parsed_db.username or 'postgres',
+            'PASSWORD': parsed_db.password or '',
+            'HOST': parsed_db.hostname or 'localhost',
+            'PORT': str(parsed_db.port or 5432),
+            'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', 60)),
         }
     }
-}
+elif DB_ENGINE in ('postgres', 'postgresql'):
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.postgresql',
+            'NAME': os.environ.get('POSTGRES_DB', 'edgegrc'),
+            'USER': os.environ.get('POSTGRES_USER', 'edgegrc_user'),
+            'PASSWORD': os.environ.get('POSTGRES_PASSWORD', ''),
+            'HOST': os.environ.get('POSTGRES_HOST', '127.0.0.1'),
+            'PORT': os.environ.get('POSTGRES_PORT', '5432'),
+            'CONN_MAX_AGE': int(os.environ.get('DB_CONN_MAX_AGE', 60)),
+        }
+    }
+else:
+    # Default: High-performance Embedded SQLite with WAL mode
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.sqlite3',
+            'NAME': BASE_DIR / 'db.sqlite3',
+            'OPTIONS': {
+                'timeout': 20,
+                'init_command': 'PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA busy_timeout=20000;',
+            }
+        }
+    }
+
+# Optional PostgreSQL SSL parameters
+if 'postgresql' in DATABASES['default']['ENGINE'] and os.environ.get('POSTGRES_SSLMODE'):
+    DATABASES['default'].setdefault('OPTIONS', {})['sslmode'] = os.environ.get('POSTGRES_SSLMODE')
 
 
 # Password validation
