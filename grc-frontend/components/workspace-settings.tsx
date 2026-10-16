@@ -535,7 +535,7 @@ export function WorkspaceSettings() {
 
   return (
     <div className="grid gap-6">
-      <Tabs value={activeTab} onValueChange={setActiveTab} className="gap-6">
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as string)} className="gap-6">
         <TabsList className="w-full justify-start sm:w-fit">
           {isAdmin && <TabsTrigger value="organization">Organization</TabsTrigger>}
           <TabsTrigger value="security">Security &amp; Access</TabsTrigger>

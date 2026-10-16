@@ -183,7 +183,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
             </div>
             <div className="grid gap-2">
               <Label htmlFor="user-role">Role</Label>
-              <Select value={currentRole} onValueChange={(v) => setValue("role", v)}>
+              <Select value={currentRole} onValueChange={(v) => setValue("role", v ?? "Contributor")}>
                 <SelectTrigger id="user-role">
                   <SelectValue placeholder="Select a role" />
                 </SelectTrigger>
@@ -201,7 +201,7 @@ export function UserFormDialog({ open, onOpenChange, user, onSubmit }: UserFormD
             {isEdit && (
               <div className="grid gap-2">
                 <Label htmlFor="user-status">Status</Label>
-                <Select value={currentStatus} onValueChange={(value) => setValue("status", value)}>
+                <Select value={currentStatus} onValueChange={(value) => setValue("status", value ?? "Inactive")}>
                   <SelectTrigger id="user-status">
                     <SelectValue placeholder="Select a status" />
                   </SelectTrigger>

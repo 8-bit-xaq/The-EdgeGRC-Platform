@@ -252,7 +252,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             </div>
 
             {availableFrameworks.length > 0 && (
-              <Select value={frameworkFilter} onValueChange={setFrameworkFilter}>
+              <Select value={frameworkFilter} onValueChange={(v) => setFrameworkFilter(v ?? "All")}>
                 <SelectTrigger className="min-w-[145px] w-auto h-7 bg-background text-xs" aria-label="Filter by framework">
                   <SelectValue placeholder="Framework" />
                 </SelectTrigger>

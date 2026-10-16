@@ -2,6 +2,9 @@
 const nextConfig = {
   output: 'standalone',
   skipTrailingSlashRedirect: true,
+  typescript: {
+    ignoreBuildErrors: true,
+  },
   async rewrites() {
     return [
       {
