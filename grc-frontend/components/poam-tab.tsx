@@ -78,7 +78,7 @@ export function PoamTab({ control, role }: PoamTabProps) {
         body: JSON.stringify({ status: "Resolved" })
       })
       if (res.ok) {
-        setTasks(tasks.map(t => t.id === taskId ? { ...t, status: "Resolved" } : t))
+        setTasks(tasks.map(t => t.id === taskId ? { ...t, status: "Resolved" as const } : t))
         toast.success("Task resolved")
       } else {
         toast.error("Failed to update task status.")

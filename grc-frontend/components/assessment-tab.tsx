@@ -260,7 +260,7 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
         onRefresh()
 
         if (newStatus === "Completed") {
-          let overallStatus = "Passing"
+          let overallStatus: ControlStatus = "Passing"
           if (auditDesign === "Deficient" || auditOp === "Deficient") overallStatus = "Failing"
           onStatusChange(overallStatus, auditDesign, auditOp)
         } else if (newStatus === "In QA Review") {
