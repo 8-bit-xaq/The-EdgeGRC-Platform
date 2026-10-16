@@ -1,10 +1,18 @@
 "use client"
 
+/**
+ * @fileoverview Framework ingestion component for importing cybersecurity and compliance frameworks.
+ *
+ * Accepts JSON schema uploads (e.g. SOC 2, NIST CSF, PCI-DSS, ISO 27001), flattens
+ * nested requirement/sub-requirement structures, normalizes control attributes,
+ * and bulk-persists controls to the Django backend (`/api/controls/`).
+ */
+
 import type React from "react"
 import { useCallback, useRef, useState } from "react"
 import { CheckCircle2, FileJson, FileWarning, RotateCcw, UploadCloud, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { fetchApi } from "@/lib/api" // <-- NEW: API Wrapper
+import { fetchApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
 type UploadStatus = "idle" | "ready" | "processing" | "success" | "error"
@@ -19,6 +27,11 @@ function formatBytes(bytes: number) {
   return `${Number.parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
 
+/**
+ * Recursively extracts and flattens controls or sub-requirements from various JSON schemas.
+ * Supports direct arrays, requirement objects with nested sub-requirements,
+ * or top-level keys like `controls`, `requirements`, `items`, or `policies`.
+ */
 function extractControls(data: any): any[] {
   if (Array.isArray(data)) return data;
   if (data && typeof data === "object") {
@@ -44,6 +57,10 @@ function extractControls(data: any): any[] {
   return [];
 }
 
+/**
+ * Resolves the framework identifier from JSON metadata fields or falls back to
+ * a sanitized variant of the uploaded file's basename.
+ */
 function extractFrameworkName(data: any, fileName: string): string {
   if (data && typeof data === "object") {
     if (typeof data.framework === "string" && data.framework.trim()) return data.framework.trim();
@@ -55,6 +72,9 @@ function extractFrameworkName(data: any, fileName: string): string {
   return clean || "General Framework";
 }
 
+/**
+ * Normalizes an arbitrary control object into the standard backend payload structure.
+ */
 function normalizeControl(item: any, index: number, frameworkName: string) {
   const rawId = item.id || item.control_id || item.identifier || `CTRL-${index + 1}`;
   let parsedTags: string[] = [];

@@ -59,6 +59,8 @@ interface SessionRow {
   current?: boolean
 }
 
+type RawSession = Omit<SessionRow, "icon">
+
 const SESSION_TIMEOUTS = ["15 minutes", "30 minutes", "1 hour", "4 hours", "8 hours"]
 
 /**
@@ -160,7 +162,7 @@ export function WorkspaceSettings() {
       fetchApi("sessions/")
         .then(res => res.json())
         .then(data => {
-          const formatted = data.map((s: any) => ({
+          const formatted = data.map((s: RawSession) => ({
             ...s,
             icon: Monitor 
           }))

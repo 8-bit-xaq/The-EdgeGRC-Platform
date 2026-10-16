@@ -1,5 +1,13 @@
 "use client"
 
+/**
+ * @fileoverview Admin Console component for user identity and access management.
+ *
+ * Provides administrative controls for listing, searching, creating, editing,
+ * and deleting user accounts via the Django backend (`/api/users/`).
+ * Enforces safety mechanisms such as preventing self-deletion of the active admin.
+ */
+
 import { useMemo, useState, useEffect } from "react"
 import { toast } from "sonner"
 import { Pencil, Search, ShieldCheck, Trash2, UserPlus } from "lucide-react"
@@ -27,11 +35,12 @@ import { UserFormDialog } from "@/components/user-form-dialog"
 import {
   initials,
   type ManagedUser,
+  type RawApiUser,
   type UserRole,
   type UserStatus,
 } from "@/lib/users"
 import { cn } from "@/lib/utils"
-import { fetchApi } from "@/lib/api" // <-- NEW: Imported the API wrapper
+import { fetchApi } from "@/lib/api"
 
 function RoleBadge({ role }: { role: UserRole }) {
   const styles: Record<UserRole, string> = {
@@ -86,12 +95,12 @@ export function AdminConsole() {
     fetchApi("users/")
       .then((res) => res.json())
       .then((data) => {
-        const fetchedUsers = data.map((u: any) => ({
+        const fetchedUsers = data.map((u: RawApiUser) => ({
           id: String(u.id),
           name: `${u.first_name || ""} ${u.last_name || ""}`.trim() || u.username,
           username: u.username,
           role: (u.role || "Contributor") as UserRole, 
-          status: u.is_active ? "Active" : "Inactive" as UserStatus, 
+          status: (u.is_active ? "Active" : "Inactive") as UserStatus, 
         }))
         setUsers(fetchedUsers)
       })

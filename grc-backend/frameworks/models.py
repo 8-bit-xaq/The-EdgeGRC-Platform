@@ -1,3 +1,14 @@
+"""
+Edge-GRC Core Data Models & Automation Signals.
+
+Defines the database schema for:
+- Governance & Compliance Controls (Control, TestPlan, Proof, AssessmentActivity)
+- Enterprise Risk Register (Risk, RemediationTask)
+- Identity & Session Security (UserProfile, ActiveSession)
+- Platform Management (Notification, OrganizationSettings)
+- Automated Crosswalking & Synchronization Engine
+"""
+
 from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
@@ -448,6 +459,12 @@ def notify_task_assignment(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=Control)
 def auto_link_controls(sender, instance, created, **kwargs):
+    """
+    Automated Crosswalk Linker:
+    Evaluates shared tags across different compliance frameworks (e.g. NIST 800-53,
+    SOC 2, ISO 27001, PCI-DSS) and establishes bidirectional crosswalk relationships.
+    Uses `_is_auto_linking` re-entrancy flag to prevent recursion during M2M assignments.
+    """
     if getattr(instance, '_is_auto_linking', False):
         return
         
@@ -465,6 +482,19 @@ def auto_link_controls(sender, instance, created, **kwargs):
 
 @receiver(post_save, sender=Control)
 def auto_sync_crosswalked_controls(sender, instance, **kwargs):
+    """
+    Automated Assessment & Evidence Harmonization:
+    When a control is evaluated, approved, or provided with fresh evidence,
+    this signal propagates the compliance evaluation across all crosswalked sibling controls.
+    
+    Harmonization Rules:
+    1. If this instance was explicitly modified (status, evidence, or effectiveness changed),
+       it acts as the authoritative source of truth.
+    2. If no direct evaluation change occurred on this instance (e.g. initial crosswalk link),
+       the cluster selects the highest-weighted control (`get_eval_weight`) as authoritative,
+       prioritizing formal Passing/Failing outcomes over un-assessed states.
+    3. Uses `_is_syncing` re-entrancy flags to guarantee atomic cascade without infinite loops.
+    """
     if getattr(instance, '_is_syncing', False) or getattr(instance, '_is_auto_linking', False):
         return
         
@@ -488,6 +518,7 @@ def auto_sync_crosswalked_controls(sender, instance, **kwargs):
         cluster = [instance] + list(siblings)
         
         def get_eval_weight(c):
+            """Calculates evidentiary priority: Passing/Failing (10) > Approval (5) > Ready (3)."""
             w = 0
             if c.status in ["Passing", "Failing"]: w += 10
             elif c.status == "Awaiting Approval": w += 5
@@ -529,6 +560,11 @@ def auto_sync_crosswalked_controls(sender, instance, **kwargs):
 
 @receiver(post_save, sender=RemediationTask)
 def auto_resolve_control(sender, instance, **kwargs):
+    """
+    Automated POAM to Control Pipeline:
+    When a remediation task is marked 'Resolved', automatically transitions any
+    'Failing' associated control to 'Ready for Audit' so auditors can re-verify.
+    """
     if instance.status == "Resolved":
         control = instance.control
         if control.status == "Failing":

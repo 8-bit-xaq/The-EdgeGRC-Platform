@@ -1,5 +1,14 @@
 "use client"
 
+/**
+ * @fileoverview Session Inactivity Tracker component.
+ *
+ * Enforces appliance security by listening to user activity events (mousedown,
+ * keydown, touchstart, scroll) and triggering automated logout upon reaching
+ * the organization-configured idle timeout. Warns the user 120 seconds before
+ * session termination, providing an option to extend the session.
+ */
+
 import { useEffect, useRef, useState } from "react"
 import { toast } from "sonner"
 import { AlertCircle, Clock } from "lucide-react"

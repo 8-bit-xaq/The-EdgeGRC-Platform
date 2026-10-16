@@ -1,5 +1,15 @@
 'use client'
 
+/**
+ * @fileoverview Appliance login screen component.
+ *
+ * Implements standard credential authentication via `/api/login/`:
+ * - Form validation using React Hook Form and Zod schema.
+ * - Dynamic session persistence selection (`localStorage` vs. `sessionStorage`) based on "Remember Me".
+ * - Mandatory first-run password change interception (`must_change_password`).
+ * - Custom branding integration (organization name and logo).
+ */
+
 import * as React from 'react'
 import { Eye, EyeOff, Loader2, LockKeyhole, ShieldCheck } from 'lucide-react'
 import { useForm } from 'react-hook-form'

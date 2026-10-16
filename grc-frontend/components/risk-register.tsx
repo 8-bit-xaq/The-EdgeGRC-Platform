@@ -1,5 +1,14 @@
 "use client"
 
+/**
+ * @fileoverview Risk Register component for tracking compliance and operational risks.
+ *
+ * Implements risk assessment workflows using likelihood and impact scoring (1-5 matrix),
+ * automatically calculating risk severity (Low, Medium, High, Critical). Supports
+ * bidirectional mapping between risks and mitigating compliance controls, full CRUD
+ * operations against `/api/risks/`, and role-based action gating.
+ */
+
 import { useEffect, useState } from "react"
 import { AlertTriangle, Plus, ShieldCheck, Trash2, Pencil, Link2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -31,7 +40,7 @@ import {
 } from "@/components/ui/select"
 import { type ComplianceControl } from "@/lib/controls"
 import { type RiskItem, getRiskLevel } from "@/lib/risks"
-import { fetchApi } from "@/lib/api" // <-- NEW: Imported the API wrapper
+import { fetchApi } from "@/lib/api"
 import { toast } from "sonner"
 
 export function RiskRegister() {
@@ -64,7 +73,7 @@ export function RiskRegister() {
         const risksData = await risksRes.json()
         const controlsData = await controlsRes.json()
         setRisks(risksData)
-        setControls(controlsData.map((c: any) => ({ ...c, id: c.control_id })))
+        setControls(controlsData.map((c: ComplianceControl) => ({ ...c, id: c.control_id })))
       }
     } catch (err) {
       toast.error("Failed to load risk register data.")

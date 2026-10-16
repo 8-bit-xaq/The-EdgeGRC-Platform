@@ -1,3 +1,13 @@
+/**
+ * @fileoverview Compliance domain models, evaluation status types, and test plan specifications.
+ *
+ * Defines the core types for:
+ * - `ControlStatus`: Passing, Failing, Not Evaluated, Ready for Audit, Awaiting Approval, Not Applicable.
+ * - `EffectivenessStatus`: Effective, Deficient, Not Tested (design and operational).
+ * - `ComplianceControl`: Full representation with proof attachments, POA&M remediation tasks,
+ *   test plans, crosswalk links, and recurring audit schedules.
+ */
+
 export type ControlStatus = "Passing" | "Failing" | "Not Evaluated" | "Ready for Audit" | "Awaiting Approval" | "Not Applicable"
 export const CONTROL_STATUSES: ControlStatus[] = ["Passing", "Failing", "Not Evaluated", "Ready for Audit", "Awaiting Approval", "Not Applicable"]
 
@@ -9,7 +19,6 @@ export const TEST_METHODOLOGIES: TestMethodology[] = ["Interview", "Observation"
 
 export type AssessmentStatus = "Planned" | "In Progress" | "In QA Review" | "Completed"
 
-// --- NEW: Scheduling Types ---
 export type TestingFrequency = "None" | "Monthly" | "Quarterly" | "Bi-Annual" | "Annual"
 export const TESTING_FREQUENCIES: TestingFrequency[] = ["None", "Monthly", "Quarterly", "Bi-Annual", "Annual"]
 

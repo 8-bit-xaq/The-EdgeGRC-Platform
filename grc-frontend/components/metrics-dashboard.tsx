@@ -1,5 +1,16 @@
 "use client"
 
+/**
+ * @fileoverview Metrics & Executive Compliance Dashboard component.
+ *
+ * Visualizes organizational posture via interactive Recharts:
+ * - Real-time compliance health score (% Passing).
+ * - Design and Operational effectiveness distributions (Donut charts).
+ * - Comparative Inherent vs. Residual risk scores (Bar chart).
+ * - Operational task queues (Open POA&Ms, Upcoming Audits, Approvals pending review).
+ * - Interactive click-throughs allowing direct filtering into the Controls Table.
+ */
+
 import { useEffect, useMemo, useState } from "react"
 import { Label, Pie, PieChart, BarChart, Bar, XAxis, YAxis, CartesianGrid, Legend } from "recharts"
 import { ShieldCheck, TrendingUp, AlertTriangle, Loader2, Target, ListTodo, ClipboardCheck, ClipboardList, CalendarClock } from "lucide-react"

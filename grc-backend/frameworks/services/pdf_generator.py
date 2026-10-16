@@ -1,3 +1,13 @@
+"""
+Edge-GRC High-Fidelity Audit Report PDF Generation Engine.
+
+Generates executive-ready compliance packages utilizing ReportLab Flowables:
+- Executive summary with dynamic compliance posture scorecards and pie charts.
+- Control evaluation matrices, evidentiary proofs, and testing plans.
+- Risk register heatmaps and POA&M remediation task breakdowns.
+- AES-128/StandardEncryption password protection and confidential running headers/footers.
+"""
+
 import io
 import base64
 from django.utils import timezone

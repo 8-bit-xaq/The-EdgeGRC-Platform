@@ -1,5 +1,15 @@
+/**
+ * @fileoverview Risk register types and risk scoring heuristics.
+ *
+ * Provides interfaces for enterprise risk definitions (`RiskItem`) and risk
+ * level qualitative thresholds (Critical >= 15, High >= 10, Medium >= 5, Low < 5).
+ */
+
 import { ComplianceControl } from "./controls"
 
+/**
+ * Representation of an enterprise or compliance risk item.
+ */
 export interface RiskItem {
   id: number
   risk_id: string
@@ -13,6 +23,9 @@ export interface RiskItem {
   mitigating_control_ids?: string[]
 }
 
+/**
+ * Maps a numeric risk score (likelihood × impact, scale 1-25) to qualitative styling and labels.
+ */
 export function getRiskLevel(score: number): { label: string; color: string; badge: string } {
   if (score >= 15) {
     return { label: "Critical", color: "#ef4444", badge: "bg-destructive/15 text-destructive border-destructive/20" }

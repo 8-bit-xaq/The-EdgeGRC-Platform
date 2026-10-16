@@ -1,3 +1,11 @@
+"""
+Cryptographic Keypair Generator for Appliance Updates.
+
+Generates an RSA-2048 keypair used to digitally sign and verify appliance OTA update packages:
+- `configs/update_pub.pem`: Public key bundled with the appliance to verify updates before extraction.
+- `configs/vendor_private.pem`: Private key held strictly by the vendor/release engineer to sign updates.
+"""
+
 import os
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives import serialization

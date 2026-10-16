@@ -1,5 +1,13 @@
 "use client"
 
+/**
+ * @fileoverview Main navigation sidebar component.
+ *
+ * Provides primary view switching (Dashboard, Frameworks, Risk Register, Users,
+ * Audit Logs, Settings) and displays active user avatar, role badge, organization
+ * branding, and logout action.
+ */
+
 import { useEffect, useState } from "react"
 import { AlertTriangle, LayoutDashboard, Layers, LogOut, ScrollText, Settings, ShieldCheck, Users } from "lucide-react"
 import { cn } from "@/lib/utils"

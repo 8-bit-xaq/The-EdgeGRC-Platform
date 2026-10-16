@@ -1,5 +1,14 @@
 "use client"
 
+/**
+ * @fileoverview Main compliance controls table component.
+ *
+ * Displays all compliance controls across imported frameworks (e.g., SOC 2, NIST, PCI-DSS).
+ * Provides multi-faceted filtering (framework, implementation status, effectiveness),
+ * full-text search, expandable detail drawers with mapped crosswalk relationships,
+ * and launches modal dialogs for evidence upload and approval workflows.
+ */
+
 import { useEffect, useMemo, useState, Fragment } from "react"
 import { Search, Pencil, ListFilter, Eye, ChevronDown, AlertTriangle, ListTodo, X, ClipboardCheck, CalendarClock } from "lucide-react"
 import { Input } from "@/components/ui/input"

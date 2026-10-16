@@ -1,5 +1,14 @@
 "use client"
 
+/**
+ * @fileoverview Evidence documentation and proof attachment tab component.
+ *
+ * Provides evidence management for a compliance control:
+ * - Textual rationale and categorization tags.
+ * - Multi-file upload for physical audit artifacts (PDF, PNG, JPG, JSON) to `/api/proofs/upload/`.
+ * - Role-based editing locks (Contributors cannot modify approved controls; Auditors and Executives are read-only).
+ */
+
 import { useState, useRef, useEffect } from "react"
 import { Upload, FileText, X } from "lucide-react"
 import { Button } from "@/components/ui/button"

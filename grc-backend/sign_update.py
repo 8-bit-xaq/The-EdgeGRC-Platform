@@ -1,3 +1,11 @@
+"""
+Appliance Update Packaging & Digital Signature Utility.
+
+Packages an update payload (`payload.zip`) and attaches an RSA-SHA256 cryptographic
+signature (`signature.sig`) signed with the vendor private key. The appliance verifies
+this signature with `configs/update_pub.pem` before extracting any update.
+"""
+
 import sys
 import zipfile
 from cryptography.hazmat.primitives.asymmetric import padding

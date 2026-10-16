@@ -1,5 +1,13 @@
 "use client"
 
+/**
+ * @fileoverview Organization Context & Branding Synchronization.
+ * Provides global state management for company name, workspace title, and logo.
+ * - Hydrates instantly on mount from local browser cache (`localStorage`) to avoid visual flicker.
+ * - Fetches authoritative server settings from `/api/organization` asynchronously.
+ * - Automatically synchronizes dynamic tab favicon and document title with the company logo.
+ */
+
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import { fetchApi } from "@/lib/api"
 

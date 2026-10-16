@@ -1,5 +1,16 @@
 "use client"
 
+/**
+ * @fileoverview Assessment tab for defining test procedures, scheduling audits, and recording evaluation results.
+ *
+ * Provides a tripartite audit workflow:
+ * 1. Test Plan: Defining testing methodologies (Inquiry, Observation, Inspection, Reperformance),
+ *    steps, expected evidence, and test plan attachments via `/api/test-plans/`.
+ * 2. Schedule: Assigning recurring cadence (Monthly, Quarterly, Annually) and next audit date.
+ * 3. Assessment Execution: Logging formal audit activities, testing design and operational
+ *    effectiveness, and advancing the control's overarching compliance status.
+ */
+
 import { useEffect, useState } from "react"
 import { CheckCircle, Send, Trash2, Play, ClipboardCheck, ClipboardList, History, CalendarClock, FileText } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -15,6 +26,7 @@ import {
   TEST_METHODOLOGIES,
   TESTING_FREQUENCIES,
   type ComplianceControl,
+  type ControlStatus,
   type EffectivenessStatus,
   type TestMethodology,
   type TestingFrequency,
@@ -27,7 +39,7 @@ interface AssessmentTabProps {
   control: ComplianceControl
   role: string | null
   onRefresh: () => void
-  onStatusChange: (status: any, design: EffectivenessStatus, op: EffectivenessStatus) => void
+  onStatusChange: (status: ControlStatus, design: EffectivenessStatus, op: EffectivenessStatus) => void
 }
 
 export function AssessmentTab({ control, role, onRefresh, onStatusChange }: AssessmentTabProps) {

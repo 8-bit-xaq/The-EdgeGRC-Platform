@@ -1,5 +1,14 @@
 "use client"
 
+/**
+ * @fileoverview Frameworks & Controls parent view component.
+ *
+ * Coordinates framework ingestion and control browsing:
+ * - Automatically renders the FrameworkUploader when the database has zero controls.
+ * - Collapses the importer once controls exist, maintaining an on-demand modal trigger for Admins.
+ * - Bridges deep-linked control IDs and status filters from the Metrics Dashboard to the Controls Table.
+ */
+
 import { useEffect, useState } from "react"
 import { Plus, X, UploadCloud } from "lucide-react"
 import { Button } from "@/components/ui/button"

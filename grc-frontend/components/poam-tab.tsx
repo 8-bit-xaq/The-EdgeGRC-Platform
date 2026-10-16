@@ -1,5 +1,13 @@
 "use client"
 
+/**
+ * @fileoverview Plan of Action and Milestones (POA&M) remediation tracker component.
+ *
+ * Enables creating, tracking, and completing corrective action items for deficient
+ * controls via `/api/tasks/`. Enforces role-based permissions to ensure read-only
+ * viewers (Auditors, Executives) cannot modify remediation milestones.
+ */
+
 import { useEffect, useState } from "react"
 import { Check, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"

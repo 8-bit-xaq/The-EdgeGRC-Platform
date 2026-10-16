@@ -1,5 +1,13 @@
 'use client'
 
+/**
+ * @fileoverview Authentication Gatekeeper Component.
+ * Intercepts root page loads to verify session integrity:
+ * - Pings `/api/verify-session/` to validate HttpOnly session cookies without UI flash.
+ * - Routes authenticated users to `GrcApp`, handles mandatory password rotation,
+ *   tracks idle session inactivity, and routes unauthenticated visitors to `LoginScreen`.
+ */
+
 import { useState, useEffect } from 'react'
 import { GrcApp } from '@/components/grc-app'
 import { LoginScreen } from '@/components/login-screen'

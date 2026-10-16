@@ -1,3 +1,11 @@
+"""
+Edge-GRC Django-Q Background Tasks.
+
+Scheduled jobs executed by `grc-worker` (qcluster):
+- `automated_nightly_backup`: Full database snapshot + media backup with 7-day retention policy.
+- Automated audit schedule processing & recurring compliance cycle advancement.
+"""
+
 import os
 import io
 import sqlite3

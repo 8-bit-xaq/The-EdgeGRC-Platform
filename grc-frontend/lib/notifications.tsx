@@ -1,10 +1,22 @@
 "use client"
 
+/**
+ * @fileoverview Notification state management context and polling provider.
+ *
+ * Provides application-wide alert notifications for the EdgeGRC appliance:
+ * - Polls `/api/notifications/` every 30 seconds when authenticated.
+ * - Supports optimistic state updates for marking notifications read or deleting them.
+ * - Formats relative timestamps (e.g. "Just now", "5m ago", "2h ago").
+ */
+
 import React, { createContext, useContext, useEffect, useState } from "react"
 import { fetchApi } from "@/lib/api"
 
 export type NotificationSeverity = "info" | "success" | "warning" | "critical"
 
+/**
+ * Normalized notification model used across UI popovers and lists.
+ */
 export interface AppNotification {
   id: string
   title: string
@@ -12,6 +24,20 @@ export interface AppNotification {
   severity: NotificationSeverity
   read: boolean
   timestamp: string
+  target_control_id?: string
+}
+
+/**
+ * Raw notification schema returned by Django REST API (`/api/notifications/`).
+ */
+interface RawApiNotification {
+  id: number | string
+  title: string
+  description: string
+  severity: NotificationSeverity
+  read: boolean
+  timestamp: string
+  target_control_id?: string
 }
 
 interface NotificationsContextType {
@@ -36,15 +62,15 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
     const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
     if (!token) return
 
-      try {
-        const res = await fetchApi("notifications/")
-        if (res.ok) {
-          const data = await res.json()
-          setNotifications(data.map((n: any) => ({ ...n, id: String(n.id) })))
-        }
-      } catch (err) {
-        console.error("Failed to fetch notifications", err)
+    try {
+      const res = await fetchApi("notifications/")
+      if (res.ok) {
+        const data = await res.json()
+        setNotifications(data.map((n: RawApiNotification) => ({ ...n, id: String(n.id) })))
       }
+    } catch (err) {
+      console.error("Failed to fetch notifications", err)
+    }
   }
 
   useEffect(() => {

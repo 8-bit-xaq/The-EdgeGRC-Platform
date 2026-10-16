@@ -1,3 +1,10 @@
+/**
+ * @fileoverview React Query hooks for GRC data caching and synchronized state management.
+ *
+ * Provides query hooks for controls (`useControls`), risks (`useRisks`),
+ * and remediation tasks (`useTasks`) backed by TanStack Query.
+ */
+
 import { useQuery } from "@tanstack/react-query"
 import { fetchApi } from "@/lib/api"
 import type { ComplianceControl, RemediationTask } from "@/lib/controls"
@@ -11,7 +18,7 @@ export function useControls() {
       if (!res.ok) throw new Error("Failed to fetch controls")
       const data = await res.json()
       // Normalize the ID field globally before caching
-      return data.map((c: any) => ({ ...c, id: c.control_id }))
+      return data.map((c: ComplianceControl) => ({ ...c, id: c.control_id }))
     },
   })
 }

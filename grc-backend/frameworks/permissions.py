@@ -1,3 +1,17 @@
+"""
+Edge-GRC Role-Based Access Control (RBAC) Permissions Matrix.
+
+Enforces fine-grained authorization policies across compliance artifacts:
+
+| Role        | Controls           | Assessments & QA | Evidence & Proofs | Risks & POA&M     | Appliance Settings |
+|:------------|:-------------------|:-----------------|:------------------|:------------------|:-------------------|
+| Admin       | Full CRUD          | Full CRUD        | Full CRUD         | Full CRUD         | Full CRUD          |
+| Auditor     | Read / Evaluate    | Create / Conduct | Read-Only         | Read / Mitigate   | None               |
+| Reviewer    | Read / QA Review   | Review / Approve | Read-Only         | Read / Review     | None               |
+| Contributor | Read / Add Evidence| None             | Upload / Delete   | Read / Remediate  | None               |
+| Executive   | Read-Only          | Read-Only        | Read-Only         | Read-Only         | None               |
+"""
+
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
 def get_user_role(request):

@@ -1,6 +1,18 @@
+/**
+ * @fileoverview Audit log types, time-filtering utilities, and relative timestamp formatters.
+ *
+ * Defines the structured schema for tamper-evident activity logging across the appliance:
+ * - `AuditLogEntry`: Normalized frontend log model with expandable change metadata.
+ * - `RawAuditLog`: Backend Django auditlog event payload schema.
+ * - Relative time calculators and interval range predicates.
+ */
+
 export type AuditSeverity = "Success" | "Warning" | "Critical"
 export type AuditCategory = "Auth" | "Data Changes" | "System"
 
+/**
+ * Normalized audit log entry displayed in the audit trail table.
+ */
 export interface AuditLogEntry {
   id: string
   timestamp: string // ISO string
@@ -11,6 +23,21 @@ export interface AuditLogEntry {
   severity: AuditSeverity
   /** Structured event metadata surfaced in the expandable row. */
   metadata: Record<string, unknown>
+}
+
+/**
+ * Raw audit log model returned by Django REST API (`/api/auditlogs/`).
+ */
+export interface RawAuditLog {
+  id: number | string
+  action: number
+  actor_name?: string
+  target_repr?: string
+  ip_address?: string
+  content_type_name?: string
+  changes?: Record<string, unknown>
+  changed_fields?: string
+  timestamp: string
 }
 
 export const AUDIT_CATEGORIES: AuditCategory[] = ["Auth", "Data Changes", "System"]

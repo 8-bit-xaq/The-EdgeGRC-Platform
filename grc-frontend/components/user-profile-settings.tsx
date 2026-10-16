@@ -1,5 +1,16 @@
 "use client"
 
+/**
+ * @fileoverview User Profile & Settings component.
+ *
+ * Manages user self-service settings:
+ * - Profile details: Full name, username, assigned RBAC role.
+ * - Avatar: Uploading, compressing (HTML5 canvas), and storing custom profile pictures.
+ * - Password Management: Validating and changing the user's login password.
+ * - Notification Preferences: Persisting alert subscriptions for assessment QA rounds,
+ *   POA&M task assignments, and scheduled audit reminders via `/api/users/<id>/`.
+ */
+
 import { useEffect, useState, useRef } from "react"
 import { toast } from "sonner"
 import { Loader2, Upload } from "lucide-react"
@@ -16,7 +27,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card"
-import { initials } from "@/lib/users"
+import { initials, type RawApiUser } from "@/lib/users"
 import { fetchApi } from "@/lib/api"
 
 interface NotificationPref {
@@ -51,7 +62,7 @@ export function UserProfileSettings() {
     .then(res => res.json())
     .then(data => {
       if (Array.isArray(data)) {
-        const currentUser = data.find((u: any) => u.username === username)
+        const currentUser = data.find((u: RawApiUser) => u.username === username)
         if (currentUser) {
           setName(`${currentUser.first_name || ""} ${currentUser.last_name || ""}`.trim() || username || "User")
           setUserId(String(currentUser.id))

@@ -1,3 +1,14 @@
+"""
+Edge-GRC Hybrid Session & Token Authentication Engine.
+
+Provides enterprise authentication balancing interactive browser UX with programmatic API needs:
+1. Primary Transport: Secure HttpOnly session cookies (`grc_token`) preventing XSS token theft.
+2. Fallback Transport: Standard `Authorization: Token <key>` headers for automated/API access.
+3. CSRF Protection: Automatically enforces Django CSRF verification when cookies are used.
+4. Activity Heartbeat: Automatically extends active sessions and terminates inactive sessions
+   based on the organization's configurable inactivity timeout (`OrganizationSettings.session_timeout`).
+"""
+
 import datetime
 from django.utils import timezone
 from rest_framework.authentication import TokenAuthentication

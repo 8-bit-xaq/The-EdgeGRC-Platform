@@ -1,13 +1,43 @@
+/**
+ * @fileoverview User management types, constants, and helper utilities.
+ * 
+ * Defines the core role-based access control (RBAC) roles ("Admin", "Auditor",
+ * "Contributor", "Reviewer", "Executive"), user status types, and the interfaces
+ * for both frontend state representations (`ManagedUser`) and backend API payloads
+ * (`RawApiUser`).
+ */
+
 export type UserRole = "Admin" | "Auditor" | "Contributor" | "Reviewer" | "Executive"
 export type UserStatus = "Active" | "Inactive"
 
+/**
+ * Representation of a user in the frontend state and UI tables.
+ */
 export interface ManagedUser {
   id: string
   name: string
   username: string
   role: UserRole
   status: UserStatus
-  notify_schedules?: boolean;
+  notify_schedules?: boolean
+}
+
+/**
+ * Raw user model returned from the backend Django REST API (`/api/users/`).
+ */
+export interface RawApiUser {
+  id: number | string
+  username: string
+  first_name?: string
+  last_name?: string
+  email?: string
+  role?: string
+  is_active?: boolean
+  must_change_password?: boolean
+  avatar?: string
+  notify_assessments?: boolean
+  notify_tasks?: boolean
+  notify_schedules?: boolean
 }
 
 export const USER_ROLES: UserRole[] = ["Admin", "Auditor", "Contributor", "Reviewer", "Executive"]

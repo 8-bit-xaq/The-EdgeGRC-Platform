@@ -1,10 +1,19 @@
 "use client"
 
+/**
+ * @fileoverview Modal dialog for inspecting and updating a compliance control.
+ *
+ * Houses three modular tab panels:
+ * 1. Evidence Tab: Uploading, downloading, and reviewing supporting documentation/proof files.
+ * 2. Assessment Tab: Defining test plans, managing audit schedules, and executing evaluations.
+ * 3. POA&M Tab: Tracking Plan of Action and Milestones remediation tasks.
+ */
+
 import { Link2, AlertTriangle, FileText, ClipboardCheck, ListTodo } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Badge } from "@/components/ui/badge"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { type ComplianceControl, type EffectivenessStatus } from "@/lib/controls"
+import { type ComplianceControl, type ControlStatus, type EffectivenessStatus } from "@/lib/controls"
 
 // Import the extracted child components
 import { EvidenceTab } from "@/components/evidence-tab"
@@ -25,7 +34,7 @@ export function EditEvidenceDialog({ control, open, onOpenChange, onSave, onRefr
   const isExecutive = userRole === "Executive"
 
   // Handler for when the Assessment tab determines a status needs to be updated globally
-  function handleStatusChangeFromAssessment(status: any, design: EffectivenessStatus, op: EffectivenessStatus) {
+  function handleStatusChangeFromAssessment(status: ControlStatus, design: EffectivenessStatus, op: EffectivenessStatus) {
     if (control) {
       onSave({
         ...control,

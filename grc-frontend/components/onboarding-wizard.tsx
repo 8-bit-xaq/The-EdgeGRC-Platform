@@ -1,5 +1,15 @@
 "use client"
 
+/**
+ * @fileoverview Initial setup and onboarding wizard for new EdgeGRC appliance deployments.
+ *
+ * Guides administrators through mandatory first-run setup steps:
+ * 1. Security: Forcing a master password change from the factory default.
+ * 2. Branding: Setting legal company name, workspace title, and uploading/resizing logo.
+ * 3. Baseline Framework: Importing a JSON framework file (e.g., SOC 2, NIST, PCI-DSS).
+ * 4. Completion: Initializing session state and transitioning into the core GRC dashboard.
+ */
+
 import { useEffect, useRef, useState } from "react"
 import { Building2, Upload, ArrowRight, ShieldCheck, CheckCircle2, ChevronRight, LockKeyhole } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -9,6 +19,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { useOrganization } from "@/lib/organization"
 import { FrameworkUploader } from "@/components/framework-uploader"
 import { fetchApi } from "@/lib/api"
+import { type RawApiUser } from "@/lib/users"
 import { toast } from "sonner"
 
 interface OnboardingWizardProps {
@@ -46,7 +57,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       })
       .then(data => {
         if (Array.isArray(data)) {
-          const currentUser = data.find((u: any) => u.username === username)
+          const currentUser = data.find((u: RawApiUser) => u.username === username)
           if (currentUser) {
             setUserId(String(currentUser.id))
           }

@@ -1,5 +1,14 @@
 "use client"
 
+/**
+ * @fileoverview Notification Bell and popover component.
+ *
+ * Renders the top-bar notification indicator, badge count, and popover drawer:
+ * - Visual indicators by severity (info, success, warning, critical).
+ * - Mark as read, mark all read, individual dismissal, and clear all.
+ * - Parses and extracts embedded control IDs to navigate directly into control details.
+ */
+
 import { useState } from "react"
 import { Bell, Check, CheckCheck, Info, ShieldAlert, TriangleAlert, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -8,6 +17,7 @@ import { cn } from "@/lib/utils"
 import {
   formatRelativeTime,
   useNotifications,
+  type AppNotification,
   type NotificationSeverity,
 } from "@/lib/notifications"
 
@@ -90,8 +100,8 @@ export function NotificationBell({ onNotificationClick }: NotificationBellProps)
         ) : (
           <>
             <ul className="max-h-[22rem] overflow-y-auto">
-              {notifications.map((n: any) => {
-                const meta = SEVERITY_META[n.severity as NotificationSeverity] || SEVERITY_META.info
+              {notifications.map((n: AppNotification) => {
+                const meta = SEVERITY_META[n.severity] || SEVERITY_META.info
                 const Icon = meta.icon
                 return (
                   <li

@@ -1,4 +1,9 @@
 "use client"
+/**
+ * @fileoverview Main Application Shell Component.
+ * Orchestrates top-level navigation, sidebar collapse state, appliance setup verification,
+ * and renders core workspace views (Dashboard, Frameworks, Risks, Audits, Settings).
+ */
 
 import { useEffect, useState } from "react"
 import { Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react"
@@ -12,7 +17,6 @@ import { AuditLogs } from "@/components/audit-logs"
 import { WorkspaceSettings } from "@/components/workspace-settings"
 import { NotificationBell } from "@/components/notification-bell"
 import { RiskRegister } from "@/components/risk-register"
-import { OrganizationProvider } from "@/lib/organization"
 import { NotificationsProvider } from "@/lib/notifications"
 import { OnboardingWizard } from "@/components/onboarding-wizard"
 import { fetchApi } from "@/lib/api"

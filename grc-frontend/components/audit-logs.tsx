@@ -1,5 +1,15 @@
 "use client"
 
+/**
+ * @fileoverview Immutable system audit log viewer component.
+ *
+ * Displays security and compliance activity records retrieved from `/api/audit-logs/`:
+ * - Multi-criteria filtering by category (Authentication, Controls, Evidence, System, Access) and date range.
+ * - Full-text search across action descriptions, usernames, and actor metadata.
+ * - Deep event details including source IP addresses and user agents.
+ * - Entrypoint for the Third-Party Audit Exporter.
+ */
+
 import { Fragment, useMemo, useState, useEffect } from "react"
 import { ChevronDown, Search, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -32,6 +42,7 @@ import {
   type AuditLogEntry,
   type AuditSeverity,
   type DateRangeValue,
+  type RawAuditLog,
 } from "@/lib/audit-logs"
 import { ThirdPartyAuditExporter } from "@/components/third-party-audit-exporter"
 import { initials } from "@/lib/users"
@@ -78,7 +89,7 @@ export function AuditLogs() {
         return res.json()
       })
       .then((data) => {
-        const formattedLogs: AuditLogEntry[] = data.map((dLog: any) => {
+        const formattedLogs: AuditLogEntry[] = data.map((dLog: RawAuditLog) => {
           let actionLabel = "Modified Record"
           let logSeverity: AuditSeverity = "Success"
           

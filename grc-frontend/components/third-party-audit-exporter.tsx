@@ -1,5 +1,16 @@
 "use client"
 
+/**
+ * @fileoverview Third-Party Audit Exporter component.
+ *
+ * Configures and generates downloadable audit packages for external auditors:
+ * - Scopes: Controls matrix, uploaded evidence proof files, risk register, audit logs, and summary posture.
+ * - Formats: Bundled ZIP package, raw structured JSON, or compiled PDF executive report.
+ * - Security: Optional client-directed AES-256 ZIP encryption.
+ * - Asynchronous Processing: Initiates backend export tasks (`/api/export-audit-package/`),
+ *   polls job progress (`/api/jobs/<job_id>/`), and streams download packages (`/api/jobs/<job_id>/download/`).
+ */
+
 import { useEffect, useState } from "react"
 import {
   Archive,
