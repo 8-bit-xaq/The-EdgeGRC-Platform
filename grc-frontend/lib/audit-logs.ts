@@ -32,6 +32,7 @@ export interface RawAuditLog {
   id: number | string
   action: number
   actor_name?: string
+  object_repr?: string
   target_repr?: string
   ip_address?: string
   content_type_name?: string
