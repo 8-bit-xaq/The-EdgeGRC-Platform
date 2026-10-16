@@ -75,16 +75,26 @@ export function GrcApp({ onLogout }: GrcAppProps) {
         return
       }
 
-      // 2. Fallback backend check for other browsers
+      // 2. Fallback backend check for other browsers or cleared caches
       if (savedRole === "Admin") {
         try {
-          const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
+          // If controls already exist, the framework was already seeded
           const res = await fetchApi("controls/")
-          
           if (res.ok) {
             const data = await res.json()
-            // If the database has controls, the framework was already seeded elsewhere
             if (Array.isArray(data) && data.length > 0) {
+              localStorage.setItem("grc_onboarding_complete", "true")
+              setIsInitializing(false)
+              return
+            }
+          }
+
+          // If organization branding is already customized, setup was already completed
+          const orgRes = await fetchApi("organization")
+          if (orgRes.ok) {
+            const orgData = await orgRes.json()
+            const isConfigured = (orgData.company_name && orgData.company_name !== "Edge GRC") || Boolean(orgData.logo_data_url)
+            if (isConfigured) {
               localStorage.setItem("grc_onboarding_complete", "true")
               setIsInitializing(false)
               return

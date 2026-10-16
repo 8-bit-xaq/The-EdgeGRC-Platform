@@ -35,9 +35,12 @@ export async function fetchApi(endpoint: string, options: RequestInit = {}) {
 
   // Global 401 Unauthorized handling
   if (response.status === 401 && typeof window !== "undefined") {
-    // Aggressively clear all state
-    localStorage.clear()
-    sessionStorage.clear()
+    // Selectively clear session credentials, preserving persistent device settings like onboarding status
+    const authKeys = ["grc_username", "grc_role", "grc_avatar", "grc_token"]
+    authKeys.forEach((key) => {
+      localStorage.removeItem(key)
+      sessionStorage.removeItem(key)
+    })
     
     // Safely redirect to login without looping if already on the root page
     if (window.location.pathname !== "/") {
