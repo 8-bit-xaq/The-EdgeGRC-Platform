@@ -49,9 +49,10 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
     fetchApi("organization")
       .then(res => {
         if (res.ok) return res.json()
-        throw new Error("Failed to fetch organization settings")
+        return null
       })
       .then(data => {
+        if (!data) return
         if (typeof window !== "undefined") {
           try {
             if (data.logo_data_url) {
