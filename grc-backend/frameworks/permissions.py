@@ -30,30 +30,47 @@ class IsAdminUserOrReadOnly(BasePermission):
 
 class ControlMatrixPermissions(BasePermission):
     """
-    - Admins: Full access.
-    - Auditors & Reviewers: Can update status and evaluations, but cannot alter evidence.
-    - Contributors: Can update evidence, but cannot set status to Passing/Awaiting.
+    - Admins: Full access (including DELETE).
+    - Auditors & Reviewers: Can update status and evaluations, but cannot alter evidence or delete controls.
+    - Contributors: Can update evidence on unlocked controls, but cannot modify effectiveness ratings or set status to Passing/Not Applicable.
     """
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:
             return True
-            
+
         role = get_user_role(request)
         if role == 'Admin':
             return True
-            
+
+        # Only Admins can delete controls
+        if request.method == 'DELETE':
+            return False
+
         if role in ['Auditor', 'Reviewer']:
             req_evidence = request.data.get('evidence')
-            if req_evidence and req_evidence != obj.evidence:
+            if req_evidence is not None and req_evidence != obj.evidence:
                 return False
             return True
-            
+
         if role == 'Contributor':
+            # Contributors cannot modify controls locked in Passing or Awaiting Approval
+            if obj.status in ['Passing', 'Awaiting Approval']:
+                return False
+
             req_status = request.data.get('status')
             if req_status in ['Passing', 'Not Applicable']:
                 return False
+
+            req_design = request.data.get('control_effectiveness')
+            if req_design is not None and req_design != obj.control_effectiveness:
+                return False
+
+            req_op = request.data.get('implementation_effectiveness')
+            if req_op is not None and req_op != obj.implementation_effectiveness:
+                return False
+
             return True
-            
+
         return False
 
 class AssessmentPermissions(BasePermission):
@@ -98,12 +115,27 @@ class TestPlanPermissions(BasePermission):
         return role in ['Admin', 'Auditor']
 
 class EvidenceUploadPermissions(BasePermission):
-    """Reviewers and Auditors are strictly forbidden from uploading proof files."""
+    """
+    Reviewers, Auditors, and Executives are forbidden from uploading/deleting proof files.
+    Contributors cannot delete proofs on controls locked in Passing or Awaiting Approval.
+    """
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:
             return True
         role = get_user_role(request)
         return role in ['Admin', 'Contributor']
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = get_user_role(request)
+        if role == 'Admin':
+            return True
+        if role == 'Contributor':
+            if hasattr(obj, 'control') and obj.control.status in ['Passing', 'Awaiting Approval']:
+                return False
+            return True
+        return False
 
 class IsAdminOrSelf(BasePermission):
     """Allows full access to Admins, and read/update access to a user on their own User record."""

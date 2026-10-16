@@ -539,14 +539,24 @@ pip install -q gunicorn
 
 # Configure Pluggable Database (PostgreSQL / SQLite)
 if [ "$DB_ENGINE" = "postgres" ] || [ "$DB_ENGINE" = "postgresql" ]; then
+    # Strictly validate PostgreSQL identifiers to prevent SQL/command injection
+    if [[ ! "$POSTGRES_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        log_error "Invalid POSTGRES_USER identifier '${POSTGRES_USER}'. Only alphanumeric characters and underscores are permitted."
+        exit 1
+    fi
+    if [[ ! "$POSTGRES_DB" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        log_error "Invalid POSTGRES_DB identifier '${POSTGRES_DB}'. Only alphanumeric characters and underscores are permitted."
+        exit 1
+    fi
+
     if [ "$POSTGRES_LOCAL" = true ]; then
         log_info "Configuring local PostgreSQL service..."
         systemctl enable --now postgresql >/dev/null 2>&1 || true
-        sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${POSTGRES_USER}'" 2>/dev/null | grep -q 1 || \
-            sudo -u postgres psql -c "CREATE USER ${POSTGRES_USER} WITH PASSWORD '${POSTGRES_PASSWORD}';" >/dev/null 2>&1
-        sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${POSTGRES_DB}'" 2>/dev/null | grep -q 1 || \
-            sudo -u postgres psql -c "CREATE DATABASE ${POSTGRES_DB} OWNER ${POSTGRES_USER};" >/dev/null 2>&1
-        sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO ${POSTGRES_USER};" >/dev/null 2>&1
+        sudo -u postgres psql -v db_user="$POSTGRES_USER" -tc "SELECT 1 FROM pg_roles WHERE rolname = :'db_user'" 2>/dev/null | grep -q 1 || \
+            sudo -u postgres psql -v db_user="$POSTGRES_USER" -v db_pass="$POSTGRES_PASSWORD" -c "CREATE USER :\"db_user\" WITH PASSWORD :'db_pass';" >/dev/null 2>&1
+        sudo -u postgres psql -v db_name="$POSTGRES_DB" -tc "SELECT 1 FROM pg_database WHERE datname = :'db_name'" 2>/dev/null | grep -q 1 || \
+            sudo -u postgres psql -v db_name="$POSTGRES_DB" -v db_user="$POSTGRES_USER" -c "CREATE DATABASE :\"db_name\" OWNER :\"db_user\";" >/dev/null 2>&1
+        sudo -u postgres psql -v db_name="$POSTGRES_DB" -v db_user="$POSTGRES_USER" -c "GRANT ALL PRIVILEGES ON DATABASE :\"db_name\" TO :\"db_user\";" >/dev/null 2>&1
         log_success "Local PostgreSQL service active and database '${POSTGRES_DB}' provisioned."
     fi
 

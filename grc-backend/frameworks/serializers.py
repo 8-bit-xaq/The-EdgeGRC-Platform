@@ -176,21 +176,37 @@ class ControlSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         request = self.context.get('request')
-        user_role = getattr(request.user.profile, 'role', 'Contributor') if hasattr(request, 'user') and hasattr(request.user, 'profile') else 'Contributor'
-        
-        new_status = validated_data.get('status', instance.status)
-        
-        if user_role == 'Contributor' and new_status == 'Passing':
-            raise serializers.ValidationError({"status": "Contributors cannot mark controls as Passing."})
+        if request and hasattr(request, 'user') and request.user.is_superuser:
+            user_role = 'Admin'
+        elif request and hasattr(request, 'user') and hasattr(request.user, 'profile'):
+            user_role = getattr(request.user.profile, 'role', 'Contributor')
+        else:
+            user_role = 'Contributor'
 
-        if new_status == 'Not Applicable' and user_role not in ['Admin', 'Contributor']:
-            raise serializers.ValidationError({"status": "Only Admins and Contributors can mark controls as Not Applicable."})
-            
+        new_status = validated_data.get('status', instance.status)
+
+        if user_role == 'Contributor':
+            if instance.status in ['Passing', 'Awaiting Approval']:
+                raise serializers.ValidationError({"status": "Contributors cannot modify controls that are Passing or Awaiting Approval."})
+            if new_status in ['Passing', 'Not Applicable']:
+                raise serializers.ValidationError({"status": "Contributors cannot mark controls as Passing or Not Applicable."})
+            # Strip privileged fields that Contributors are not permitted to alter
+            for restricted_field in [
+                'control_effectiveness', 'implementation_effectiveness',
+                'description', 'requirement_title', 'process_mechanism',
+                'framework', 'testing_frequency', 'next_audit_date', 'cross_walked_controls'
+            ]:
+                validated_data.pop(restricted_field, None)
+
+        if new_status == 'Not Applicable' and user_role != 'Admin':
+            raise serializers.ValidationError({"status": "Only Admins can mark controls as Not Applicable."})
+
         if user_role in ['Reviewer', 'Auditor']:
             if 'evidence' in validated_data and validated_data['evidence'] != instance.evidence:
                 raise serializers.ValidationError({"evidence": "Reviewers and Auditors cannot modify text evidence."})
-            validated_data.pop('description', None)
-            
+            for restricted_field in ['description', 'requirement_title', 'process_mechanism', 'framework']:
+                validated_data.pop(restricted_field, None)
+
         return super().update(instance, validated_data)
 
 class RiskSerializer(serializers.ModelSerializer):
@@ -304,28 +320,36 @@ class UserSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         from django.contrib.auth.password_validation import validate_password
         from django.core.exceptions import ValidationError as DjangoValidationError
+        from rest_framework.authtoken.models import Token
 
         request = self.context.get('request')
         is_admin = request and (getattr(getattr(request.user, 'profile', None), 'role', '') == 'Admin' or request.user.is_superuser)
 
         profile_data = validated_data.pop('profile', {})
-        
+        password_changed = False
+
         if 'password' in validated_data:
             new_pw = validated_data.pop('password')
+            if not is_admin:
+                current_pw = request.data.get('current_password') if request else None
+                if not current_pw or not instance.check_password(current_pw):
+                    raise serializers.ValidationError({"password": ["Current password verification is required."]})
             try:
                 validate_password(new_pw, user=instance)
             except DjangoValidationError as e:
                 raise serializers.ValidationError({"password": list(e.messages)})
             instance.set_password(new_pw)
-            
+            instance.profile.must_change_password = profile_data.get('must_change_password', False)
+            password_changed = True
+
         for attr, value in validated_data.items():
-            if attr == 'is_active' and not is_admin:
-                continue # Non-admins cannot deactivate/activate accounts
+            if attr in ('is_active', 'username') and not is_admin:
+                continue  # Non-admins cannot deactivate/activate accounts or change usernames
             setattr(instance, attr, value)
-            
+
         if profile_data:
             if 'role' in profile_data and is_admin:
-                instance.profile.role = profile_data['role'] # Only admins can change roles
+                instance.profile.role = profile_data['role']  # Only admins can change roles
             if 'must_change_password' in profile_data and is_admin:
                 instance.profile.must_change_password = profile_data['must_change_password']
             if 'notify_assessments' in profile_data:
@@ -334,10 +358,10 @@ class UserSerializer(serializers.ModelSerializer):
                 instance.profile.notify_tasks = profile_data['notify_tasks']
             if 'notify_schedules' in profile_data:
                 instance.profile.notify_schedules = profile_data['notify_schedules']
-            
+
         if request and request.FILES.get('avatar'):
             instance.profile.avatar = request.FILES['avatar']
-            
+
         try:
             instance.profile.full_clean()
         except Exception as e:
@@ -346,6 +370,12 @@ class UserSerializer(serializers.ModelSerializer):
 
         instance.profile.save()
         instance.save()
+
+        # Revoke active sessions if the account was deactivated or an admin reset another user's password
+        if not instance.is_active or (password_changed and request and instance != request.user):
+            Token.objects.filter(user=instance).delete()
+            ActiveSession.objects.filter(user=instance).delete()
+
         return instance
     
 class NotificationSerializer(serializers.ModelSerializer):

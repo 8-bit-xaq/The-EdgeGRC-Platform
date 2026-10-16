@@ -182,7 +182,14 @@ class ProofUploadView(views.APIView):
             control = Control.objects.get(control_id=control_id)
         except Control.DoesNotExist:
             return Response(status=status.HTTP_404_NOT_FOUND)
-        
+
+        user_role = 'Admin' if request.user.is_superuser else getattr(getattr(request.user, 'profile', None), 'role', 'Contributor')
+        if user_role == 'Contributor' and control.status in ['Passing', 'Awaiting Approval']:
+            return Response(
+                {'error': ['Contributors cannot upload evidence to controls that are Passing or Awaiting Approval.']},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         file_obj = request.FILES.get('file')
         if file_obj:
             # 1. Instantiate the object without saving to the database yet
@@ -224,10 +231,18 @@ class AuditLogListView(generics.ListAPIView):
 
 
 class UserCreateView(generics.ListCreateAPIView):
-    """Enables Administrators to provision new users and assign role-based authorization levels."""
-    queryset = User.objects.all()
+    """
+    Enables Administrators to list all users and provision new accounts.
+    Non-admin users receive only their own user profile record to prevent account enumeration.
+    """
     serializer_class = UserSerializer
     permission_classes = [IsAuthenticated, IsAdminUserOrReadOnly]
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_superuser or getattr(getattr(user, 'profile', None), 'role', '') == 'Admin':
+            return User.objects.select_related('profile').all()
+        return User.objects.select_related('profile').filter(pk=user.pk)
 
 
 class UserDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -586,7 +601,13 @@ def background_backup_task():
             temp_json = temp_db_path + '.json'
             try:
                 with open(temp_json, 'w', encoding='utf-8') as f:
-                    call_command('dumpdata', '--natural-foreign', '--natural-primary', exclude=['contenttypes', 'auth.permission'], stdout=f)
+                    call_command(
+                        'dumpdata',
+                        '--natural-foreign',
+                        '--natural-primary',
+                        exclude=['contenttypes', 'auth.permission', 'django_q', 'sessions'],
+                        stdout=f
+                    )
                 zip_file.write(temp_json, arcname='database.json')
             except Exception as e:
                 print(f"Portable database dump warning: {e}")
@@ -634,7 +655,7 @@ class SystemBackupView(APIView):
 
 
 def background_restore_task(zip_path):
-    import zipfile, os, shutil, tempfile, sqlite3
+    import zipfile, os, shutil, tempfile, sqlite3, json
     from django.conf import settings
     from django.db import connection, connections
     from django.core.management import call_command
@@ -665,6 +686,20 @@ def background_restore_task(zip_path):
                 if not check_result or check_result[0] != 'ok':
                     raise Exception(f"Database integrity verification failed: {check_result}")
 
+                # SECURITY: Purge any queued django-q tasks or unauthorized schedule callables
+                # from the uploaded SQLite database before replacing the active database file.
+                try:
+                    test_cursor.execute("DELETE FROM django_q_ormq;")
+                except sqlite3.OperationalError:
+                    pass
+                try:
+                    test_cursor.execute(
+                        "DELETE FROM django_q_schedule WHERE func != 'frameworks.tasks.evaluate_audit_schedules';"
+                    )
+                except sqlite3.OperationalError:
+                    pass
+                test_conn.commit()
+
             connections.close_all()
 
             db_path = str(settings.DATABASES['default']['NAME'])
@@ -679,6 +714,21 @@ def background_restore_task(zip_path):
             shutil.copyfile(extracted_db, db_path)
 
         elif os.path.exists(extracted_json):
+            # SECURITY: Filter out dangerous internal/queue models (e.g., django_q, sessions,
+            # contenttypes) before running loaddata to prevent arbitrary callable or pickle injection.
+            with open(extracted_json, 'r', encoding='utf-8') as f:
+                raw_fixture = json.load(f)
+            if not isinstance(raw_fixture, list):
+                raise Exception("Invalid database.json fixture format.")
+
+            blocked_prefixes = ('django_q.', 'sessions.', 'admin.', 'contenttypes.')
+            sanitized_fixture = [
+                obj for obj in raw_fixture
+                if isinstance(obj, dict) and not str(obj.get('model', '')).lower().startswith(blocked_prefixes)
+            ]
+            with open(extracted_json, 'w', encoding='utf-8') as f:
+                json.dump(sanitized_fixture, f)
+
             # Universal / PostgreSQL Loaddata Restoration
             call_command('loaddata', extracted_json)
 
@@ -695,12 +745,16 @@ def background_restore_task(zip_path):
                 except Exception as seq_err:
                     print(f"PostgreSQL sequence reset warning: {seq_err}")
 
-        # 2. Media Directory Restoration
+        # 2. Media Directory Restoration — validate each file before copying
         extracted_media = os.path.join(temp_dir, 'media')
         media_root = os.path.abspath(str(settings.MEDIA_ROOT))
         if os.path.exists(extracted_media):
+            from .models import ALLOWED_UPLOAD_EXTENSIONS
             for folder_name, _, filenames in os.walk(extracted_media):
                 for filename in filenames:
+                    ext = os.path.splitext(filename)[1].lower()
+                    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+                        continue
                     src_file = os.path.join(folder_name, filename)
                     rel_path = os.path.relpath(src_file, extracted_media)
                     dest_file = os.path.abspath(os.path.join(media_root, rel_path))
@@ -862,6 +916,7 @@ class SystemUpdateView(APIView):
             
             payload_path = os.path.join(update_dir, 'payload.zip')
             try:
+                from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
                 with zipfile.ZipFile(zip_path, 'r') as outer_zip:
                     if 'payload.zip' not in outer_zip.namelist() or 'signature.sig' not in outer_zip.namelist():
                         return Response({"error": "Invalid update package format. Must contain payload.zip and signature.sig."}, status=status.HTTP_400_BAD_REQUEST)
@@ -869,30 +924,42 @@ class SystemUpdateView(APIView):
                     with outer_zip.open('signature.sig') as sig_f:
                         signature = sig_f.read()
                         
-                    with outer_zip.open('payload.zip') as payload_f:
-                        payload_data = payload_f.read()
+                    # Stream payload.zip in 64KB chunks to disk while computing SHA-256 digest
+                    # to avoid loading up to 500MB into memory at once.
+                    hasher = hashes.Hash(hashes.SHA256())
+                    with outer_zip.open('payload.zip') as payload_f, open(payload_path, 'wb') as out_f:
+                        while True:
+                            chunk = payload_f.read(65536)
+                            if not chunk:
+                                break
+                            hasher.update(chunk)
+                            out_f.write(chunk)
+                    digest = hasher.finalize()
                         
-                    # Verify signature
+                    # Verify RSA signature against the prehashed SHA-256 digest
                     public_key.verify(
                         signature,
-                        payload_data,
+                        digest,
                         padding.PKCS1v15(),
-                        hashes.SHA256()
+                        asym_utils.Prehashed(hashes.SHA256())
                     )
-                    
-                    # Write the verified payload to disk
-                    with open(payload_path, 'wb') as f:
-                        f.write(payload_data)
                         
             except InvalidSignature:
+                if os.path.exists(payload_path):
+                    os.remove(payload_path)
                 return Response({"error": "Signature verification failed! The update is not trusted."}, status=status.HTTP_403_FORBIDDEN)
             except zipfile.BadZipFile:
+                if os.path.exists(payload_path):
+                    os.remove(payload_path)
                 return Response({"error": "Uploaded file is not a valid ZIP archive."}, status=status.HTTP_400_BAD_REQUEST)
             except Exception as e:
+                if os.path.exists(payload_path):
+                    os.remove(payload_path)
                 return Response({"error": f"Error parsing update package: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
             
-            # Execute with the VERIFIED payload path
-            threading.Thread(target=execute_system_update, args=(payload_path, '/opt/grc-appliance/')).start()
+            # Execute with the VERIFIED payload path against the appliance root directory
+            appliance_root = str(settings.BASE_DIR.parent)
+            threading.Thread(target=execute_system_update, args=(payload_path, appliance_root)).start()
             
             return Response({"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."}, status=status.HTTP_200_OK)
             
@@ -952,12 +1019,19 @@ class HTTPSConfigurationView(APIView):
         if getattr(request.user.profile, 'role', '') != 'Admin':
             return Response({"error": "Admin access required."}, status=status.HTTP_403_FORBIDDEN)
 
-        # Extract values submitted from the frontend dialog
-        common_name = request.data.get('common_name', 'edge-grc.local')
-        org_name = request.data.get('organization', 'Edge-GRC Appliance')
-        country = request.data.get('country', 'US')
-        state = request.data.get('state', '')
-        locality = request.data.get('locality', '')
+        import re
+        # Extract and strictly validate values submitted from the frontend dialog
+        common_name = str(request.data.get('common_name', 'edge-grc.local')).strip()
+        if not common_name or len(common_name) > 253 or not re.match(r'^[a-zA-Z0-9.-]+$', common_name):
+            return Response(
+                {"error": "Invalid Common Name (CN). Only alphanumeric characters, hyphens, and dots are permitted."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        org_name = str(request.data.get('organization', 'Edge-GRC Appliance')).strip()[:64] or 'Edge-GRC Appliance'
+        country = str(request.data.get('country', 'US')).strip()[:2]
+        state = str(request.data.get('state', '')).strip()[:64]
+        locality = str(request.data.get('locality', '')).strip()[:64]
 
         # 1. Generate Cryptographic Assets
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -967,8 +1041,8 @@ class HTTPSConfigurationView(APIView):
             x509.NameAttribute(NameOID.COMMON_NAME, common_name),
             x509.NameAttribute(NameOID.ORGANIZATION_NAME, org_name),
         ]
-        if country: 
-            attributes.append(x509.NameAttribute(NameOID.COUNTRY_NAME, country))
+        if country and len(country) == 2:
+            attributes.append(x509.NameAttribute(NameOID.COUNTRY_NAME, country.upper()))
         if state: 
             attributes.append(x509.NameAttribute(NameOID.STATE_OR_PROVINCE_NAME, state))
         if locality: 
@@ -1013,21 +1087,38 @@ class HTTPSConfigurationView(APIView):
             encryption_algorithm=serialization.NoEncryption()
         )
 
-        # 2. Rewrite the Nginx Configuration File
+        # Persist custom hostname/IP to appliance_domain.txt so Django ALLOWED_HOSTS & CSRF_TRUSTED_ORIGINS stay synced
+        domain_file = os.path.join(settings.BASE_DIR, 'configs', 'appliance_domain.txt')
+        os.makedirs(os.path.dirname(domain_file), exist_ok=True)
+        existing_domains = set()
+        if os.path.exists(domain_file):
+            with open(domain_file, 'r', encoding='utf-8') as df:
+                existing_domains = {line.strip() for line in df if line.strip()}
+        if common_name not in existing_domains:
+            with open(domain_file, 'a', encoding='utf-8') as df:
+                df.write(f"\n{common_name}\n")
+        if common_name not in settings.ALLOWED_HOSTS:
+            settings.ALLOWED_HOSTS.append(common_name)
+        for scheme in ('https', 'http'):
+            origin = f"{scheme}://{common_name}"
+            if origin not in settings.CSRF_TRUSTED_ORIGINS:
+                settings.CSRF_TRUSTED_ORIGINS.append(origin)
+
+        # 2. Rewrite the Nginx Configuration File (using catch-all server_name _; to prevent directive injection)
         nginx_conf_path = os.path.join(settings.BASE_DIR, 'configs', 'nginx.conf')
         
-        https_nginx_config = f"""server {{
+        https_nginx_config = """server {
     listen 80;
-    server_name {common_name};
+    server_name _;
     
     server_tokens off;
     # Force HTTP to redirect to HTTPS
     return 301 https://$host$request_uri;
-}}
+}
 
-server {{
+server {
     listen 443 ssl;
-    server_name {common_name};
+    server_name _;
 
     # Security: Hide Nginx version banner
     server_tokens off;
@@ -1049,7 +1140,7 @@ server {{
     ssl_prefer_server_ciphers on;
 
     # Allow large payloads exclusively for system updates and database restores
-    location /api/update/ {{
+    location /api/update/ {
         client_max_body_size 500M;
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
@@ -1059,9 +1150,9 @@ server {{
         proxy_read_timeout 300s;
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
-    }}
+    }
 
-    location /api/restore/ {{
+    location /api/restore/ {
         client_max_body_size 500M;
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
@@ -1071,9 +1162,9 @@ server {{
         proxy_read_timeout 300s;
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
-    }}
+    }
 
-    location /api/ {{
+    location /api/ {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -1085,33 +1176,33 @@ server {{
         proxy_read_timeout 300s;
         proxy_connect_timeout 300s;
         proxy_send_timeout 300s;
-    }}
+    }
     
-    location /static/ {{
+    location /static/ {
         alias /opt/grc-appliance/grc-backend/staticfiles/;
-    }}
+    }
 
-    location /media/ {{
+    location /media/ {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-    }}
+    }
 
-    location /protected_media/ {{
+    location /protected_media/ {
         internal;
         alias /opt/grc-appliance/grc-backend/media/;
-    }}
+    }
 
-    location / {{
+    location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-    }}
-}}
+    }
+}
 """
         with open(nginx_conf_path, 'w') as f:
             f.write(https_nginx_config)
@@ -1165,13 +1256,35 @@ class OrganizationSettingsView(APIView):
         obj, _ = OrganizationSettings.objects.get_or_create(pk=1)
         
         if 'company_name' in request.data:
-            obj.company_name = request.data['company_name']
+            obj.company_name = str(request.data['company_name'])[:255]
         if 'workspace_name' in request.data:
-            obj.workspace_name = request.data['workspace_name']
+            obj.workspace_name = str(request.data['workspace_name'])[:255]
         if 'logo_data_url' in request.data:
-            obj.logo_data_url = request.data['logo_data_url']
+            logo_val = request.data['logo_data_url']
+            if logo_val:
+                logo_str = str(logo_val)
+                allowed_prefixes = (
+                    'data:image/png;base64,',
+                    'data:image/jpeg;base64,',
+                    'data:image/jpg;base64,',
+                    'data:image/gif;base64,',
+                    'data:image/webp;base64,',
+                    'data:image/x-icon;base64,',
+                )
+                if not logo_str.startswith(allowed_prefixes) or len(logo_str) > 5 * 1024 * 1024:
+                    return Response(
+                        {"error": "Invalid logo format. Only raster image data URLs (PNG, JPEG, GIF, WebP, ICO) up to 5MB are allowed."},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                obj.logo_data_url = logo_str
+            else:
+                obj.logo_data_url = None
         if 'session_timeout' in request.data:
-            obj.session_timeout = int(request.data['session_timeout'])
+            try:
+                timeout_val = int(request.data['session_timeout'])
+                obj.session_timeout = max(5, min(timeout_val, 1440))
+            except (ValueError, TypeError):
+                return Response({"error": "Invalid session_timeout value."}, status=status.HTTP_400_BAD_REQUEST)
             
         obj.save()
         
@@ -1199,11 +1312,16 @@ class FaviconView(APIView):
         if obj and obj.logo_data_url and obj.logo_data_url.startswith('data:image'):
             try:
                 header, encoded = obj.logo_data_url.split(',', 1)
-                mime_type = header.split(';')[0].replace('data:', '')
-                binary_data = base64.b64decode(encoded)
-                response = HttpResponse(binary_data, content_type=mime_type)
-                response['Cache-Control'] = 'no-cache, must-revalidate'
-                return response
+                mime_type = header.split(';')[0].replace('data:', '').strip().lower()
+                if mime_type == 'image/jpg':
+                    mime_type = 'image/jpeg'
+                allowed_favicon_mimes = {'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/x-icon'}
+                if mime_type in allowed_favicon_mimes:
+                    binary_data = base64.b64decode(encoded)
+                    response = HttpResponse(binary_data, content_type=mime_type)
+                    response['Cache-Control'] = 'no-cache, must-revalidate'
+                    response['X-Content-Type-Options'] = 'nosniff'
+                    return response
             except Exception:
                 pass
                 
@@ -1255,7 +1373,8 @@ class JobStatusView(APIView):
                 filename = task.result.get('filename') if isinstance(task.result, dict) else None
                 return Response({'status': 'SUCCESS', 'filename': filename})
             elif task.success is False:
-                return Response({'status': 'FAILED', 'error': str(task.result)})
+                print(f"Background task {task_id} ({task.func}) failed: {task.result}")
+                return Response({'status': 'FAILED', 'error': 'Background task failed during execution.'})
             else:
                 return Response({'status': 'PENDING'})
         except Task.DoesNotExist:
@@ -1335,15 +1454,27 @@ class ProtectedMediaView(APIView):
             raise Http404("File not found")
 
         content_type, _ = mimetypes.guess_type(target_path)
-        content_type = content_type or 'application/octet-stream'
+        content_type = (content_type or 'application/octet-stream').lower()
+
+        # Never serve active web content types with their executable MIME type
+        safe_inline_types = {'image/png', 'image/jpeg', 'image/gif', 'image/webp', 'application/pdf'}
+        if content_type not in safe_inline_types:
+            content_type = 'application/octet-stream'
 
         if not settings.DEBUG:
             response = HttpResponse()
             response['Content-Type'] = content_type
             response['X-Accel-Redirect'] = f'/protected_media/{path}'
-            return response
         else:
-            return FileResponse(open(target_path, 'rb'), content_type=content_type)
+            response = FileResponse(open(target_path, 'rb'), content_type=content_type)
+
+        # Force download attachment for non-inline file types and lock down browser execution
+        if content_type not in safe_inline_types:
+            safe_filename = os.path.basename(target_path).replace('"', '')
+            response['Content-Disposition'] = f'attachment; filename="{safe_filename}"'
+        response['X-Content-Type-Options'] = 'nosniff'
+        response['Content-Security-Policy'] = "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+        return response
 
 
 class ChangePasswordView(APIView):
@@ -1382,9 +1513,11 @@ class ChangePasswordView(APIView):
             request.user.profile.must_change_password = False
             request.user.profile.save()
 
-        # Keep current session authenticated by refreshing token
+        # Keep current session authenticated by refreshing token and rotating ActiveSession
         Token.objects.filter(user=request.user).delete()
+        ActiveSession.objects.filter(user=request.user).delete()
         token = Token.objects.create(user=request.user)
+        ActiveSession.objects.create(user=request.user, token_key=token.key)
 
         response = Response({"message": "Password changed successfully."})
         is_secure_conn = request.is_secure() or (not settings.DEBUG and request.headers.get('x-forwarded-proto') == 'https')

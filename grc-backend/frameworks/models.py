@@ -25,31 +25,66 @@ import mimetypes
 mimetypes.add_type('application/vnd.ms-outlook', '.msg')
 mimetypes.add_type('message/rfc822', '.eml')
 mimetypes.add_type('application/x-x509-ca-cert', '.cer')
+mimetypes.add_type('application/x-x509-ca-cert', '.crt')
 mimetypes.add_type('application/x-pem-file', '.pem')
-mimetypes.add_type('application/pkcs8', '.key')
+mimetypes.add_type('text/markdown', '.md')
+mimetypes.add_type('text/plain', '.log')
+
+ALLOWED_UPLOAD_EXTENSIONS = {
+    '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp',
+    '.txt', '.csv', '.json', '.xml', '.md', '.log',
+    '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    '.msg', '.eml', '.zip', '.cer', '.crt', '.pem',
+}
+
+BLOCKED_MIME_TYPES = {
+    'text/html',
+    'application/xhtml+xml',
+    'image/svg+xml',
+    'application/javascript',
+    'text/javascript',
+    'application/x-javascript',
+    'application/x-executable',
+    'application/x-dosexec',
+    'application/x-msdos-program',
+    'application/x-sh',
+    'application/x-shellscript',
+}
+
+MAX_UPLOAD_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
+
 
 def validate_secure_upload(upload):
-    """Validates that the file's extension loosely matches its cryptographic signature and scans for malware."""
+    """Validates file size, strict extension allowlist, magic byte signature, and scans for malware."""
+    if getattr(upload, 'size', 0) > MAX_UPLOAD_SIZE_BYTES:
+        raise ValidationError("File exceeds the maximum allowed upload size of 25MB.")
+
+    ext = os.path.splitext(upload.name)[1].lower()
+    if not ext or ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        raise ValidationError(f"Unsupported or restricted file extension '{ext or 'none'}'.")
+
     scan_antivirus_if_available(upload)
 
     file_header = upload.read(2048)
-    upload.seek(0) 
-    
+    upload.seek(0)
+
     real_mime_type = magic.from_buffer(file_header, mime=True)
-    
+
+    if real_mime_type in BLOCKED_MIME_TYPES:
+        raise ValidationError(f"Security violation: Files of type '{real_mime_type}' are not permitted.")
+
     if real_mime_type == 'inode/x-empty':
         return
-        
+
     expected_mime_type, _ = mimetypes.guess_type(upload.name)
-    
     if not expected_mime_type:
-        return
+        raise ValidationError(f"Unable to determine expected MIME type for '{ext}'.")
 
     if real_mime_type == expected_mime_type:
         return
 
     if expected_mime_type.startswith('text/'):
-        if real_mime_type.startswith('text/') or real_mime_type in ['application/json', 'application/xml', 'application/csv']:
+        if (real_mime_type.startswith('text/') and real_mime_type not in BLOCKED_MIME_TYPES) or real_mime_type in ['application/json', 'application/xml', 'application/csv']:
             return
 
     if real_mime_type == 'application/zip' and expected_mime_type in [
@@ -57,20 +92,17 @@ def validate_secure_upload(upload):
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
         'application/epub+zip',
-        'application/java-archive',
     ]:
         return
-        
-    # Legacy MS Office formats
-    if expected_mime_type in ['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint']:
-        if real_mime_type in ['application/vnd.ms-office', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/CDFV2-corrupt']:
+
+    # Legacy MS Office & Outlook formats
+    if expected_mime_type in ['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/vnd.ms-outlook']:
+        if real_mime_type in ['application/vnd.ms-office', 'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/vnd.ms-outlook', 'application/CDFV2-corrupt', 'application/x-ole-storage']:
             return
-            
+
     if expected_mime_type == 'text/csv' and real_mime_type == 'text/plain':
-        scan_antivirus_if_available(upload)
         return
 
-    ext = os.path.splitext(upload.name)[1].lower()
     raise ValidationError(f"File spoofing detected. A {ext} file should not contain '{real_mime_type}' data.")
 
 
