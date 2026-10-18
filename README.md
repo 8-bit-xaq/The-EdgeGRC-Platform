@@ -129,3 +129,12 @@ Edge-GRC enforces strict least-privilege principles:
 *   The web applications run entirely under the `www-data` user.
 *   System updates and restarts are managed via strictly scoped `/etc/sudoers.d/grc-updater` rules that only permit restarting specific systemd services, preventing full root shell escalation.
 *   Protection against Path Traversal and Zip-Slip vulnerabilities during backup restoration and system updates.
+
+---
+
+## 📄 License
+
+Edge-GRC is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-or-later)**. See the [LICENSE](LICENSE) file for the full license terms.
+
+*Commercial licensing, enterprise support agreements, and custom proprietary terms are available upon request.*
+

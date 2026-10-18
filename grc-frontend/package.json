@@ -1,6 +1,7 @@
 {
   "name": "my-project",
   "version": "1.0.4",
+  "license": "AGPL-3.0-or-later",
   "private": true,
   "scripts": {
     "dev": "next dev",
