@@ -71,3 +71,6 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Frameworks
+PCI-DSS-v4.0.1-prioritized-approach.json
+
