@@ -19,6 +19,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError
 import os
 import magic
+import zipfile
 
 # --- FILE UPLOAD SECURITY ---
 import mimetypes
@@ -94,6 +95,16 @@ def validate_secure_upload(upload):
         'application/epub+zip',
     ]:
         return
+
+    if ext == '.docx':
+        try:
+            with zipfile.ZipFile(upload) as document:
+                if {'[Content_Types].xml', 'word/document.xml'}.issubset(document.namelist()):
+                    return
+        except zipfile.BadZipFile:
+            pass
+        finally:
+            upload.seek(0)
 
     # Legacy MS Office & Outlook formats
     if expected_mime_type in ['application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint', 'application/vnd.ms-outlook']:

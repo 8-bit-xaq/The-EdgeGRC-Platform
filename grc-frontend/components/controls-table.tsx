@@ -198,7 +198,19 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                 credentials: "include",
                 body: formData, 
               });
-              if (!uploadRes.ok) toast.error(`Failed to upload ${proof.name}.`);
+              if (!uploadRes.ok) {
+                const responseBody = await uploadRes.json().catch(() => null);
+                const apiError = responseBody && typeof responseBody === "object" && "error" in responseBody
+                  ? responseBody.error
+                  : null;
+                const errorMessage = Array.isArray(apiError)
+                  ? apiError.join(" ")
+                  : typeof apiError === "string"
+                    ? apiError
+                    : `Request failed with status ${uploadRes.status}.`;
+                toast.error(`Failed to upload ${proof.name}: ${errorMessage}`);
+                return;
+              }
             }
           }
         }
