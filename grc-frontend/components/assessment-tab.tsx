@@ -46,6 +46,7 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
   const isAdmin = role === "Admin"
   const isAuditor = role === "Auditor"
   const isReviewer = role === "Reviewer"
+  const canManageTestPlan = isAdmin || isAuditor
 
   // Test Plan State
   const [testMethodology, setTestMethodology] = useState<TestMethodology[]>([])
@@ -321,7 +322,7 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
             <ClipboardList className="size-4 text-primary" />
             Audit Test Plan
           </h3>
-          {isAdmin || isAuditor ? (
+          {canManageTestPlan ? (
             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleSaveTestPlan} disabled={isSavingTestPlan}>
               {isSavingTestPlan ? "Saving..." : "Save Plan"}
             </Button>
@@ -333,16 +334,14 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
             <div className="flex flex-wrap gap-2 mt-1">
               {TEST_METHODOLOGIES.map((method) => {
                 const isSelected = testMethodology.includes(method)
+                if (!canManageTestPlan && !isSelected) return null
                 return (
                   <Badge
                     key={method}
                     variant={isSelected ? "default" : "outline"}
-                    className={cn(
-                      "transition-colors",
-                      (isAdmin || isAuditor) ? "cursor-pointer hover:bg-primary/80" : "cursor-default pointer-events-none"
-                    )}
+                    className={cn("transition-colors", canManageTestPlan && "cursor-pointer hover:bg-primary/80")}
                     onClick={() => {
-                      if (!isAdmin && !isAuditor) return
+                      if (!canManageTestPlan) return
                       setTestMethodology(prev => 
                         prev.includes(method) ? prev.filter(m => m !== method) : [...prev, method]
                       )
@@ -352,31 +351,44 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
                   </Badge>
                 )
               })}
+              {!canManageTestPlan && testMethodology.length === 0 && (
+                <p className="text-sm text-muted-foreground">No methodology selected.</p>
+              )}
             </div>
           </div>
           
           <div className="grid sm:grid-cols-2 gap-4">
             <div className="grid gap-2">
               <Label className="text-xs text-muted-foreground uppercase tracking-wider">Test Steps</Label>
-              <Textarea 
-                value={testSteps} 
-                onChange={(e) => setTestSteps(e.target.value)} 
-                placeholder="1. Request population list..." 
-                rows={3} 
-                className="resize-none" 
-                disabled={!isAdmin && !isAuditor}
-              />
+              {canManageTestPlan ? (
+                <Textarea
+                  value={testSteps}
+                  onChange={(e) => setTestSteps(e.target.value)}
+                  placeholder="1. Request population list..."
+                  rows={3}
+                  className="resize-none"
+                />
+              ) : (
+                <p className="whitespace-pre-wrap rounded-md border border-border bg-card p-3 text-sm text-muted-foreground">
+                  {testSteps || "No test steps provided."}
+                </p>
+              )}
             </div>
             <div className="grid gap-2">
               <Label className="text-xs text-muted-foreground uppercase tracking-wider">Expected Artifacts</Label>
-              <Textarea 
-                value={expectedEvidence} 
-                onChange={(e) => setExpectedEvidence(e.target.value)} 
-                placeholder="e.g. Screenshot of firewall configuration." 
-                rows={3} 
-                className="resize-none" 
-                disabled={!isAdmin && !isAuditor}
-              />
+              {canManageTestPlan ? (
+                <Textarea
+                  value={expectedEvidence}
+                  onChange={(e) => setExpectedEvidence(e.target.value)}
+                  placeholder="e.g. Screenshot of firewall configuration."
+                  rows={3}
+                  className="resize-none"
+                />
+              ) : (
+                <p className="whitespace-pre-wrap rounded-md border border-border bg-card p-3 text-sm text-muted-foreground">
+                  {expectedEvidence || "No expected artifacts provided."}
+                </p>
+              )}
             </div>
           </div>
 
@@ -384,20 +396,26 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
           <div className="grid gap-3 mt-2 pt-4 border-t border-border/50">
             <Label className="text-xs text-muted-foreground uppercase tracking-wider">Test Plan Attachment</Label>
             <div className="flex flex-col sm:flex-row sm:items-center gap-4">
-              <Input 
-                type="file" 
-                onChange={(e) => setTestPlanFile(e.target.files?.[0] || null)}
-                disabled={!isAdmin && !isAuditor}
-                className="max-w-sm bg-background"
-              />
+              {canManageTestPlan && (
+                <Input
+                  type="file"
+                  onChange={(e) => setTestPlanFile(e.target.files?.[0] || null)}
+                  className="max-w-sm bg-background"
+                />
+              )}
               {existingAttachment && !testPlanFile && (
                 <a href={existingAttachment.url} target="_blank" rel="noopener noreferrer" className="text-sm font-medium text-primary hover:underline flex items-center gap-2">
                   <FileText className="size-4" />
                   {existingAttachment.name}
                 </a>
               )}
+              {!canManageTestPlan && !existingAttachment && (
+                <p className="text-sm text-muted-foreground">No test plan attachment.</p>
+              )}
             </div>
-            <p className="text-[10px] text-muted-foreground">Upload a filled-out testing matrix, evidence request sheet, or auditor workpaper.</p>
+            {canManageTestPlan && (
+              <p className="text-[10px] text-muted-foreground">Upload a filled-out testing matrix, evidence request sheet, or auditor workpaper.</p>
+            )}
           </div>
 
         </div>
@@ -409,7 +427,7 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
             <CalendarClock className="size-4 text-purple-500" />
             Automated Audit Schedule
           </h3>
-          {isAdmin || isAuditor ? (
+          {canManageTestPlan ? (
             <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={handleSaveSchedule} disabled={isSavingSchedule}>
               {isSavingSchedule ? "Saving..." : "Save Schedule"}
             </Button>
@@ -418,23 +436,35 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
         <div className="p-4 grid sm:grid-cols-2 gap-6">
           <div className="grid gap-2">
             <Label className="text-xs text-muted-foreground uppercase tracking-wider">Testing Frequency</Label>
-            <Select value={testingFrequency} onValueChange={(v) => setTestingFrequency(v as TestingFrequency)} disabled={!isAdmin && !isAuditor}>
-              <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {TESTING_FREQUENCIES.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            {canManageTestPlan ? (
+              <Select value={testingFrequency} onValueChange={(v) => setTestingFrequency(v as TestingFrequency)}>
+                <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {TESTING_FREQUENCIES.map((f) => <SelectItem key={f} value={f}>{f}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            ) : (
+              <p className="rounded-md border border-border bg-card p-2 text-sm text-muted-foreground">{testingFrequency}</p>
+            )}
           </div>
           <div className="grid gap-2">
             <Label className="text-xs text-muted-foreground uppercase tracking-wider">Next Audit Date</Label>
-            <Input 
-              type="date" 
-              value={nextAuditDate} 
-              onChange={(e) => setNextAuditDate(e.target.value)} 
-              disabled={testingFrequency === "None" || (!isAdmin && !isAuditor)}
-              className="w-full bg-background"
-            />
-            <p className="text-[10px] text-muted-foreground">The platform will request evidence 30 days prior to this date.</p>
+            {canManageTestPlan ? (
+              <>
+                <Input
+                  type="date"
+                  value={nextAuditDate}
+                  onChange={(e) => setNextAuditDate(e.target.value)}
+                  disabled={testingFrequency === "None"}
+                  className="w-full bg-background"
+                />
+                <p className="text-[10px] text-muted-foreground">The platform will request evidence 30 days prior to this date.</p>
+              </>
+            ) : (
+              <p className="rounded-md border border-border bg-card p-2 text-sm text-muted-foreground">
+                {nextAuditDate ? new Date(`${nextAuditDate}T12:00:00`).toLocaleDateString() : "No audit date scheduled."}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -476,43 +506,48 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
               <div className="grid sm:grid-cols-2 gap-6">
                 <div className="grid gap-2">
                   <Label className="text-sm">Design Effectiveness</Label>
-                  <Select 
-                    value={auditDesign} 
-                    onValueChange={(v) => setAuditDesign(v as EffectivenessStatus)} 
-                    disabled={(activeAssessment.status !== "In Progress" && !isAdmin) || (!isAdmin && !isAuditor)}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {EFFECTIVENESS_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  {((isAdmin || isAuditor) && (activeAssessment.status === "In Progress" || isAdmin)) ? (
+                    <Select value={auditDesign} onValueChange={(v) => setAuditDesign(v as EffectivenessStatus)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {EFFECTIVENESS_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="rounded-md border border-border bg-card p-2 text-sm text-muted-foreground">{auditDesign}</p>
+                  )}
                   <p className="text-[11px] text-muted-foreground">Does the documented policy adequately address the requirement?</p>
                 </div>
                 <div className="grid gap-2">
                   <Label className="text-sm">Operational Effectiveness</Label>
-                  <Select 
-                    value={auditOp} 
-                    onValueChange={(v) => setAuditOp(v as EffectivenessStatus)} 
-                    disabled={(activeAssessment.status !== "In Progress" && !isAdmin) || (!isAdmin && !isAuditor)}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {EFFECTIVENESS_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
+                  {((isAdmin || isAuditor) && (activeAssessment.status === "In Progress" || isAdmin)) ? (
+                    <Select value={auditOp} onValueChange={(v) => setAuditOp(v as EffectivenessStatus)}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {EFFECTIVENESS_STATUSES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="rounded-md border border-border bg-card p-2 text-sm text-muted-foreground">{auditOp}</p>
+                  )}
                   <p className="text-[11px] text-muted-foreground">Is there physical evidence proving the control is executed?</p>
                 </div>
               </div>
 
               <div className="grid gap-2">
                 <Label className="text-sm">Auditor Field Notes</Label>
-                <Textarea 
-                  value={auditNotes} 
-                  onChange={e => setAuditNotes(e.target.value)} 
-                  rows={3} 
-                  placeholder="Document findings, exceptions, or missing evidence here..."
-                  disabled={(activeAssessment.status !== "In Progress" && !isAdmin) || (!isAdmin && !isAuditor)}
-                />
+                {((isAdmin || isAuditor) && (activeAssessment.status === "In Progress" || isAdmin)) ? (
+                  <Textarea
+                    value={auditNotes}
+                    onChange={e => setAuditNotes(e.target.value)}
+                    rows={3}
+                    placeholder="Document findings, exceptions, or missing evidence here..."
+                  />
+                ) : (
+                  <p className="whitespace-pre-wrap rounded-md border border-border bg-card p-3 text-sm text-muted-foreground">
+                    {auditNotes || "No auditor notes provided."}
+                  </p>
+                )}
               </div>
 
               {activeAssessment.status !== "Completed" && (

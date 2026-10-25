@@ -141,14 +141,19 @@ export function EvidenceTab({ control, role, onSave }: EvidenceTabProps) {
 
       <div className="grid gap-2">
         <Label>Implementation Narrative</Label>
-        <Textarea
-          value={evidence}
-          onChange={(e) => setEvidence(e.target.value)}
-          placeholder={isEvidenceLocked ? "No narrative provided." : "Describe how this control is implemented in your environment..."}
-          rows={4}
-          className="resize-none bg-background"
-          disabled={isEvidenceLocked}
-        />
+        {isEvidenceLocked ? (
+          <p className="whitespace-pre-wrap rounded-md border border-border bg-card p-3 text-sm text-muted-foreground">
+            {evidence || "No narrative provided."}
+          </p>
+        ) : (
+          <Textarea
+            value={evidence}
+            onChange={(e) => setEvidence(e.target.value)}
+            placeholder="Describe how this control is implemented in your environment..."
+            rows={4}
+            className="resize-none bg-background"
+          />
+        )}
       </div>
 
       <div className="grid gap-2">
@@ -192,14 +197,15 @@ export function EvidenceTab({ control, role, onSave }: EvidenceTabProps) {
           <Button type="button" variant="outline" onClick={() => handleSaveGeneral(status)}>
             Save Draft
           </Button>
-          <Button 
-            type="button" 
-            onClick={() => handleSaveGeneral("Ready for Audit")}
-            disabled={status === "Ready for Audit"}
-            className="bg-blue-600 hover:bg-blue-700 text-white"
-          >
-            {status === "Ready for Audit" ? "Submitted for Audit" : "Submit for Audit"}
-          </Button>
+          {status !== "Ready for Audit" && (
+            <Button
+              type="button"
+              onClick={() => handleSaveGeneral("Ready for Audit")}
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+            >
+              Submit for Audit
+            </Button>
+          )}
         </div>
       )}
     </div>

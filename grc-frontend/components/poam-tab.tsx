@@ -27,7 +27,8 @@ interface PoamTabProps {
 export function PoamTab({ control, role }: PoamTabProps) {
   const isAdmin = role === "Admin"
   const isAuditor = role === "Auditor"
-  const isExecutive = role === "Executive"
+  const isReviewer = role === "Reviewer"
+  const canManageTasks = isAdmin || isAuditor || isReviewer
 
   const [tasks, setTasks] = useState<RemediationTask[]>([])
   const [newTaskTitle, setNewTaskTitle] = useState("")
@@ -135,7 +136,7 @@ export function PoamTab({ control, role }: PoamTabProps) {
                          Delete
                        </Button>
                      )}
-                     {task.status !== "Resolved" && !isAuditor && !isExecutive && (
+                     {task.status !== "Resolved" && canManageTasks && (
                        <Button variant="secondary" size="xs" onClick={() => handleResolveTask(task.id)} className="h-7 text-[11px] gap-1.5">
                          <Check className="size-3" />
                          Mark Resolved
@@ -149,7 +150,7 @@ export function PoamTab({ control, role }: PoamTabProps) {
         )}
       </div>
 
-      {!isAuditor && !isExecutive && (
+      {canManageTasks && (
         <div className="rounded-lg border border-border bg-card shadow-sm p-4">
           <h4 className="text-sm font-semibold mb-3">Add Remediation Task</h4>
           <form onSubmit={handleCreateTask} className="grid gap-3">
