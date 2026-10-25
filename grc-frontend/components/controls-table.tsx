@@ -367,7 +367,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                       <TableCell colSpan={4} className="py-3">
                         <div className="flex items-center gap-2 font-medium text-foreground">
                           <ChevronDown 
-                            className={cn("size-4 text-muted-foreground transition-transform duration-200", isExpanded ? "" : "-rotate-90")} 
+                            className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-200", isExpanded ? "" : "-rotate-90")}
                             aria-hidden 
                           />
                           {groupName}
