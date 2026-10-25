@@ -74,3 +74,7 @@ Thumbs.db
 # Frameworks
 PCI-DSS-v4.0.1-prioritized-approach.json
 
+# Automations
+.github
+
+
