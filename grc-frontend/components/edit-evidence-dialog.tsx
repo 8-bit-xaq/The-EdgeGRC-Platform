@@ -59,7 +59,7 @@ export function EditEvidenceDialog({ control, open, onOpenChange, onSave, onRefr
               {control.id}
             </span>
           </DialogTitle>
-          <DialogDescription className="text-pretty line-clamp-2 mt-1.5">
+          <DialogDescription className="text-pretty mt-1.5">
             {control.description}
           </DialogDescription>
           
