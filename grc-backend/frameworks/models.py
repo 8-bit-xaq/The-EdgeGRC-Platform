@@ -242,6 +242,12 @@ class Risk(models.Model):
     risk_id = models.CharField(max_length=50, unique=True)
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True, null=True)
+    attachment = models.FileField(
+        upload_to='risk_attachments/',
+        null=True,
+        blank=True,
+        validators=[validate_secure_upload]
+    )
     inherent_likelihood = models.IntegerField(default=3)
     inherent_impact = models.IntegerField(default=3)
     mitigating_controls = models.ManyToManyField(Control, related_name='mitigated_risks', blank=True)

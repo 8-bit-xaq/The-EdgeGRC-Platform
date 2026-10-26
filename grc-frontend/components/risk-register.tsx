@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AlertTriangle, Plus, ShieldCheck, Trash2, Pencil, Link2 } from "lucide-react"
+import { AlertTriangle, Plus, ShieldCheck, Trash2, Pencil, Link2, Paperclip } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
@@ -64,6 +64,7 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
   const [riskId, setRiskId] = useState("")
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
+  const [attachmentFile, setAttachmentFile] = useState<File | null>(null)
   const [likelihood, setLikelihood] = useState("3")
   const [impact, setImpact] = useState("3")
   const [selectedControlIds, setSelectedControlIds] = useState<string[]>([])
@@ -104,6 +105,7 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
     setRiskId(`RSK-${Date.now().toString().slice(-4)}`)
     setTitle("")
     setDescription("")
+    setAttachmentFile(null)
     setLikelihood("3")
     setImpact("3")
     setSelectedControlIds([])
@@ -116,6 +118,7 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
     setRiskId(risk.risk_id)
     setTitle(risk.title)
     setDescription(risk.description || "")
+    setAttachmentFile(null)
     setLikelihood(String(risk.inherent_likelihood))
     setImpact(String(risk.inherent_impact))
     setSelectedControlIds(risk.mitigating_controls_detail?.map((c) => c.control_id || (c as any).id) || [])
@@ -149,8 +152,6 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
       inherent_impact: parseInt(impact),
       mitigating_control_ids: selectedControlIds,
     }
-
-    // Cleaned up with fetchApi
     const url = editingRisk ? `risks/${editingRisk.id}/` : "risks/"
     const method = editingRisk ? "PUT" : "POST"
 
@@ -161,8 +162,27 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
       })
 
       if (res.ok) {
+        const savedRisk: RiskItem = await res.json()
+        if (attachmentFile) {
+          const formData = new FormData()
+          formData.append("attachment", attachmentFile)
+          const attachmentRes = await fetchApi(`risks/${savedRisk.id}/`, {
+            method: "PATCH",
+            body: formData,
+          })
+          if (!attachmentRes.ok) {
+            await Promise.all([
+              fetchRisksAndControls(),
+              queryClient.invalidateQueries({ queryKey: ["controls"] }),
+              queryClient.invalidateQueries({ queryKey: ["risks"] }),
+            ])
+            toast.error("Risk was saved, but the attachment upload failed.")
+            return
+          }
+        }
         toast.success(editingRisk ? "Risk record updated" : "Risk created")
         setDialogOpen(false)
+        setAttachmentFile(null)
         await Promise.all([
           fetchRisksAndControls(),
           queryClient.invalidateQueries({ queryKey: ["controls"] }),
@@ -345,6 +365,33 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
             <div className="grid gap-2">
               <Label htmlFor="description">Impact Description</Label>
               <Textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+            </div>
+
+            <div className="grid gap-2">
+              <Label htmlFor="risk-attachment">Attachment</Label>
+              {editingRisk?.attachment_name && editingRisk.attachment_url && (
+                <a
+                  href={editingRisk.attachment_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex w-fit items-center gap-1.5 text-sm text-primary underline-offset-4 hover:underline"
+                >
+                  <Paperclip className="size-4" />
+                  {editingRisk.attachment_name}
+                </a>
+              )}
+              <Input
+                id="risk-attachment"
+                type="file"
+                onChange={(event) => setAttachmentFile(event.target.files?.[0] ?? null)}
+                aria-describedby="risk-attachment-help"
+              />
+              <p id="risk-attachment-help" className="text-xs text-muted-foreground">
+                Optional. Upload a supported document up to 25 MB. Selecting a file replaces the current attachment.
+              </p>
+              {attachmentFile && (
+                <p className="text-xs text-muted-foreground">Selected: {attachmentFile.name}</p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4 bg-muted/40 p-4 rounded-lg border border-border">

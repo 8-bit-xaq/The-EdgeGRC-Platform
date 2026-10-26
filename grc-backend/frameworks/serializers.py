@@ -222,6 +222,8 @@ class ControlSerializer(serializers.ModelSerializer):
 class RiskSerializer(serializers.ModelSerializer):
     inherent_score = serializers.ReadOnlyField()
     residual_score = serializers.ReadOnlyField()
+    attachment_name = serializers.SerializerMethodField()
+    attachment_url = serializers.SerializerMethodField()
     mitigating_controls_detail = ControlSerializer(source='mitigating_controls', many=True, read_only=True)
     mitigating_control_ids = serializers.SlugRelatedField(
         many=True,
@@ -238,6 +240,9 @@ class RiskSerializer(serializers.ModelSerializer):
             'risk_id',
             'title',
             'description',
+            'attachment',
+            'attachment_name',
+            'attachment_url',
             'inherent_likelihood',
             'inherent_impact',
             'inherent_score',
@@ -245,6 +250,20 @@ class RiskSerializer(serializers.ModelSerializer):
             'mitigating_controls_detail',
             'mitigating_control_ids'
         ]
+        extra_kwargs = {
+            'attachment': {'write_only': True, 'required': False, 'allow_null': True}
+        }
+
+    def get_attachment_name(self, obj):
+        return os.path.basename(obj.attachment.name) if obj.attachment else None
+
+    def get_attachment_url(self, obj):
+        if obj.attachment:
+            request = self.context.get('request')
+            if request:
+                return request.build_absolute_uri(obj.attachment.url)
+            return obj.attachment.url
+        return None
 
 class LogEntrySerializer(serializers.ModelSerializer):
     actor_name = serializers.CharField(source='actor.username', read_only=True, default='System')

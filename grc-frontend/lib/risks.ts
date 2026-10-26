@@ -15,6 +15,8 @@ export interface RiskItem {
   risk_id: string
   title: string
   description?: string
+  attachment_name?: string | null
+  attachment_url?: string | null
   inherent_likelihood: number
   inherent_impact: number
   inherent_score: number
