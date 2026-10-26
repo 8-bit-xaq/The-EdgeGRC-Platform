@@ -200,7 +200,7 @@ export function EvidenceTab({ control, role, onSave }: EvidenceTabProps) {
       {!isEvidenceLocked && (
         <div className="flex justify-end gap-3 pt-2">
           <Button type="button" variant="outline" onClick={() => handleSaveGeneral(status)}>
-            Save Draft
+            Save
           </Button>
           {status !== "Ready for Audit" && (
             <Button

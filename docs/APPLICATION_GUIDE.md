@@ -185,7 +185,7 @@ cross-walked control IDs and linked risk IDs when present. It has three tabs:
      the requirement.
    - **Supporting Proof Files:** Upload, view, or remove attached artifacts,
      subject to role and control-state restrictions.
-   - **Save Draft / Ready for Audit:** Saves narrative/evidence changes or
+   - **Save / Ready for Audit:** Saves narrative/evidence changes or
      submits a contributor's work for formal testing. Contributors cannot
      edit after submission while the control is Ready for Audit or awaiting QA
      approval. Only administrators and reviewers can edit the control during
