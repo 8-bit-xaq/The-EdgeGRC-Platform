@@ -87,9 +87,11 @@ export function RiskRegister() {
     fetchRisksAndControls()
   }, [])
 
-  const isExecutive = role === "Executive"
+  const canManageRisks = ["Admin", "Auditor", "Reviewer"].includes(role ?? "")
+  const canDeleteRisks = role === "Admin"
 
   const openCreateDialog = () => {
+    if (!canManageRisks) return
     setEditingRisk(null)
     setRiskId(`RSK-${Date.now().toString().slice(-4)}`)
     setTitle("")
@@ -101,6 +103,7 @@ export function RiskRegister() {
   }
 
   const openEditDialog = (risk: RiskItem) => {
+    if (!canManageRisks) return
     setEditingRisk(risk)
     setRiskId(risk.risk_id)
     setTitle(risk.title)
@@ -113,6 +116,7 @@ export function RiskRegister() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!canManageRisks) return
 
     const payload = {
       risk_id: riskId,
@@ -146,6 +150,7 @@ export function RiskRegister() {
   }
 
   const handleDelete = async (id: number) => {
+    if (!canDeleteRisks) return
     try {
       const res = await fetchApi(`risks/${id}/`, {
         method: "DELETE",
@@ -188,7 +193,7 @@ export function RiskRegister() {
             Map identified business risks to compensating controls.
           </p>
         </div>
-        {!isExecutive && (
+        {canManageRisks && (
           <Button onClick={openCreateDialog} className="gap-2">
             <Plus className="size-4" /> Add Risk Scenario
           </Button>
@@ -204,20 +209,22 @@ export function RiskRegister() {
               <TableHead className="w-[120px]">Inherent</TableHead>
               <TableHead className="min-w-[200px]">Compensating Controls</TableHead>
               <TableHead className="w-[120px]">Residual</TableHead>
-              <TableHead className="w-[80px] text-right">Actions</TableHead>
+              {canManageRisks && <TableHead className="w-[80px] text-right">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
             {isLoading ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
+                <TableCell colSpan={canManageRisks ? 6 : 5} className="h-24 text-center text-muted-foreground">
                   Loading risk register...
                 </TableCell>
               </TableRow>
             ) : risks.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                  No risks identified. Add a scenario to begin tracking.
+                <TableCell colSpan={canManageRisks ? 6 : 5} className="h-24 text-center text-muted-foreground">
+                  {canManageRisks
+                    ? "No risks identified. Add a scenario to begin tracking."
+                    : "No risks identified."}
                 </TableCell>
               </TableRow>
             ) : (
@@ -260,18 +267,20 @@ export function RiskRegister() {
                         {residual.label} ({risk.residual_score})
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-right align-top">
-                      {!isExecutive && (
+                    {canManageRisks && (
+                      <TableCell className="text-right align-top">
                         <div className="flex justify-end gap-1">
                           <Button variant="ghost" size="icon" className="size-8" onClick={() => openEditDialog(risk)}>
                             <Pencil className="size-4" />
                           </Button>
-                          <Button variant="ghost" size="icon" className="size-8 text-muted-foreground hover:text-destructive" onClick={() => handleDelete(risk.id)}>
-                            <Trash2 className="size-4" />
-                          </Button>
+                          {canDeleteRisks && (
+                            <Button variant="ghost" size="icon" className="size-8 text-muted-foreground hover:text-destructive" onClick={() => handleDelete(risk.id)}>
+                              <Trash2 className="size-4" />
+                            </Button>
+                          )}
                         </div>
-                      )}
-                    </TableCell>
+                      </TableCell>
+                    )}
                   </TableRow>
                 )
               })
@@ -280,8 +289,9 @@ export function RiskRegister() {
         </Table>
       </div>
 
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
+      {canManageRisks && (
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogContent className="sm:max-w-xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{editingRisk ? "Edit Risk Scenario" : "Add Risk Scenario"}</DialogTitle>
           </DialogHeader>
@@ -377,8 +387,9 @@ export function RiskRegister() {
               <Button type="submit">Save Risk</Button>
             </DialogFooter>
           </form>
-        </DialogContent>
-      </Dialog>
+          </DialogContent>
+        </Dialog>
+      )}
     </section>
   )
 }

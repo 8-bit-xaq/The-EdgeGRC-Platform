@@ -369,10 +369,9 @@ permission checks and the intended day-to-day responsibilities.
   user-facing action can be visible while a server request is still rejected.
 - There are known differences between the current interface and server-side
   permission checks:
-  - The Risk Register hides create/edit controls for Executives, but the risk
-    API currently allows Executive create/update requests; delete remains
-    Admin-only. Conversely, the interface exposes risk actions to
-    Contributors, but the risk API grants Contributors read-only access.
+  - The Risk Register is read-only for Contributors and Executives. The risk
+    API allows Executive create/update requests even though the interface hides
+    those actions; delete remains Admin-only.
   - The assessment API's create endpoint permits Reviewer requests even though
     the interface's normal Reviewer workflow is QA review of an assessment
     already in progress.
