@@ -117,6 +117,11 @@ export function GrcApp({ onLogout }: GrcAppProps) {
   }, [])
 
   function navigate(next: NavView) {
+    if (next === "audit" && !["Admin", "Auditor", "Executive"].includes(role)) {
+      setView("frameworks")
+      setMobileOpen(false)
+      return
+    }
     setView(next)
     setMobileOpen(false)
   }

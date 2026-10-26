@@ -62,6 +62,9 @@ export function SidebarContent({ active, role, onNavigate, onLogout }: SidebarCo
   const { organization } = useOrganization()
   const [username, setUsername] = useState("User")
   const [avatar, setAvatar] = useState<string | null>(null)
+  const visibleNavItems = NAV_ITEMS.filter(
+    (item) => item.view !== "audit" || ["Admin", "Auditor", "Executive"].includes(role)
+  )
 
   useEffect(() => {
     const storedUser = localStorage.getItem("grc_username") || sessionStorage.getItem("grc_username")
@@ -105,7 +108,7 @@ export function SidebarContent({ active, role, onNavigate, onLogout }: SidebarCo
 
       {/* Nav */}
       <nav className="flex-1 space-y-1 p-3" aria-label="Primary">
-        {NAV_ITEMS.map((item) => {
+        {visibleNavItems.map((item) => {
           const Icon = item.icon
           const isActive = active === item.view
           return (
