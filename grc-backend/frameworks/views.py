@@ -72,7 +72,8 @@ from .permissions import (
     IsAdminOrSelf,
     RiskPermissions,
     RemediationTaskPermissions,
-    AuditLogPermissions
+    AuditLogPermissions,
+    control_is_submitted_for_audit,
 )
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
@@ -184,9 +185,12 @@ class ProofUploadView(views.APIView):
             return Response(status=status.HTTP_404_NOT_FOUND)
 
         user_role = 'Admin' if request.user.is_superuser else getattr(getattr(request.user, 'profile', None), 'role', 'Contributor')
-        if user_role == 'Contributor' and control.status in ['Passing', 'Awaiting Approval']:
+        if user_role == 'Contributor' and (
+            control.status == 'Passing' or
+            control_is_submitted_for_audit(control)
+        ):
             return Response(
-                {'error': ['Contributors cannot upload evidence to controls that are Passing or Awaiting Approval.']},
+                {'error': ['Contributors cannot upload evidence to controls that are Passing or submitted for audit.']},
                 status=status.HTTP_403_FORBIDDEN
             )
 
@@ -1660,6 +1664,3 @@ class HealthCheckView(APIView):
             "timestamp": timezone.now().isoformat(),
             "components": components,
         }, status=response_status)
-
-
-

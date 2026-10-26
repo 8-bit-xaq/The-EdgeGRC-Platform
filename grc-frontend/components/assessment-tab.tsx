@@ -46,7 +46,6 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
   const isAdmin = role === "Admin"
   const isAuditor = role === "Auditor"
   const isReviewer = role === "Reviewer"
-  const canManageTestPlan = isAdmin || isAuditor
 
   // Test Plan State
   const [testMethodology, setTestMethodology] = useState<TestMethodology[]>([])
@@ -70,6 +69,14 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
   const [auditOp, setAuditOp] = useState<EffectivenessStatus>("Not Tested")
   const [auditNotes, setAuditNotes] = useState("")
   const [isSavingAssessment, setIsSavingAssessment] = useState(false)
+  const hasAssessmentInQaReview =
+    activeAssessment?.status === "In QA Review" ||
+    (control.assessments?.some(assessment => assessment.status === "In QA Review") ?? false)
+  const isControlSubmittedForAudit =
+    control.status === "Ready for Audit" ||
+    control.status === "Awaiting Approval" ||
+    hasAssessmentInQaReview
+  const canManageTestPlan = isAdmin || (isAuditor && !isControlSubmittedForAudit)
 
   // Admin Clear History State
   const [showClearConfirm, setShowClearConfirm] = useState(false)

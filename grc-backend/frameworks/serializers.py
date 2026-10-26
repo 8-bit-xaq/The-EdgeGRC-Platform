@@ -7,6 +7,7 @@ from .models import ActiveSession
 from django.contrib.auth.models import User
 from auditlog.models import LogEntry
 from .models import Control, Proof, Risk, UserProfile, RemediationTask, TestPlan, AssessmentActivity, Notification
+from .permissions import control_is_submitted_for_audit
 
 class ActiveSessionSerializer(serializers.ModelSerializer):
     # Map model fields to React's expected property names
@@ -186,8 +187,8 @@ class ControlSerializer(serializers.ModelSerializer):
         new_status = validated_data.get('status', instance.status)
 
         if user_role == 'Contributor':
-            if instance.status in ['Passing', 'Awaiting Approval']:
-                raise serializers.ValidationError({"status": "Contributors cannot modify controls that are Passing or Awaiting Approval."})
+            if instance.status == 'Passing' or control_is_submitted_for_audit(instance):
+                raise serializers.ValidationError({"status": "Contributors cannot modify controls while they are submitted for audit or have a Passing status."})
             if new_status in ['Passing', 'Not Applicable']:
                 raise serializers.ValidationError({"status": "Contributors cannot mark controls as Passing or Not Applicable."})
             # Strip privileged fields that Contributors are not permitted to alter

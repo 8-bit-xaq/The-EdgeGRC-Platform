@@ -14,6 +14,15 @@ Enforces fine-grained authorization policies across compliance artifacts:
 
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
+def control_has_assessment_in_qa_review(control):
+    return control.assessments.filter(status='In QA Review').exists()
+
+def control_is_submitted_for_audit(control):
+    return (
+        control.status in ['Ready for Audit', 'Awaiting Approval'] or
+        control_has_assessment_in_qa_review(control)
+    )
+
 def get_user_role(request):
     """Helper to safely extract the user's role string."""
     if request.user.is_superuser:
@@ -31,6 +40,7 @@ class IsAdminUserOrReadOnly(BasePermission):
 class ControlMatrixPermissions(BasePermission):
     """
     - Admins: Full access (including DELETE).
+    - Reviewers can edit controls while they are submitted for audit.
     - Auditors & Reviewers: Can update status and evaluations, but cannot alter evidence or delete controls.
     - Contributors: Can update evidence on unlocked controls, but cannot modify effectiveness ratings or set status to Passing/Not Applicable.
     """
@@ -44,6 +54,9 @@ class ControlMatrixPermissions(BasePermission):
 
         # Only Admins can delete controls
         if request.method == 'DELETE':
+            return False
+
+        if control_is_submitted_for_audit(obj) and role not in ['Reviewer']:
             return False
 
         if role in ['Auditor', 'Reviewer']:
@@ -114,10 +127,20 @@ class TestPlanPermissions(BasePermission):
         role = get_user_role(request)
         return role in ['Admin', 'Auditor']
 
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        role = get_user_role(request)
+        if role == 'Admin':
+            return True
+        if role == 'Auditor':
+            return not control_is_submitted_for_audit(obj.control)
+        return False
+
 class EvidenceUploadPermissions(BasePermission):
     """
     Reviewers, Auditors, and Executives are forbidden from uploading/deleting proof files.
-    Contributors cannot delete proofs on controls locked in Passing or Awaiting Approval.
+    Contributors cannot upload/delete proofs while a control is submitted for audit.
     """
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:
@@ -132,8 +155,9 @@ class EvidenceUploadPermissions(BasePermission):
         if role == 'Admin':
             return True
         if role == 'Contributor':
-            if hasattr(obj, 'control') and obj.control.status in ['Passing', 'Awaiting Approval']:
-                return False
+            if hasattr(obj, 'control'):
+                if obj.control.status == 'Passing' or control_is_submitted_for_audit(obj.control):
+                    return False
             return True
         return False
 

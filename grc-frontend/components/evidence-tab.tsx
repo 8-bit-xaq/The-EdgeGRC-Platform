@@ -53,7 +53,12 @@ export function EvidenceTab({ control, role, onSave }: EvidenceTabProps) {
 
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const isLockedForContributor = isContributor && (control.status === "Awaiting Approval" || control.status === "Passing")
+  const isLockedForContributor = isContributor && (
+    control.status === "Ready for Audit" ||
+    control.status === "Awaiting Approval" ||
+    control.status === "Passing" ||
+    (control.assessments?.some(assessment => assessment.status === "In QA Review") ?? false)
+  )
   const isEvidenceLocked = isReviewer || isAuditor || isLockedForContributor || isExecutive
 
   useEffect(() => {
@@ -192,7 +197,7 @@ export function EvidenceTab({ control, role, onSave }: EvidenceTabProps) {
         )}
       </div>
 
-      {!isAuditor && !isReviewer && !isExecutive && (
+      {!isEvidenceLocked && (
         <div className="flex justify-end gap-3 pt-2">
           <Button type="button" variant="outline" onClick={() => handleSaveGeneral(status)}>
             Save Draft

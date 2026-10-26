@@ -418,7 +418,11 @@ class Notification(models.Model):
 
 @receiver(post_save, sender=Control)
 def notify_control_ready_for_audit(sender, instance, created, **kwargs):
-    if getattr(instance, '_is_syncing', False) or getattr(instance, '_is_auto_linking', False):
+    if (
+        getattr(instance, '_is_syncing', False) or
+        getattr(instance, '_is_auto_linking', False) or
+        getattr(instance, '_skip_ready_for_audit_notification', False)
+    ):
         return
 
     orig_status = getattr(instance, '_original_state', {}).get('status')
@@ -454,6 +458,11 @@ def notify_assessment_updates(sender, instance, created, **kwargs):
                 )
 
     elif instance.status == 'In Progress' and orig_status == 'In QA Review':
+        control = instance.control
+        control.status = 'Failing'
+        control._skip_ready_for_audit_notification = True
+        control.save(update_fields=['status'])
+
         if instance.assessor and instance.assessor.profile.notify_assessments:
             Notification.objects.create(
                 user=instance.assessor,

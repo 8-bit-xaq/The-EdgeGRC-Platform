@@ -186,13 +186,18 @@ cross-walked control IDs and linked risk IDs when present. It has three tabs:
    - **Supporting Proof Files:** Upload, view, or remove attached artifacts,
      subject to role and control-state restrictions.
    - **Save Draft / Ready for Audit:** Saves narrative/evidence changes or
-     submits a contributor's work for formal testing. The displayed actions
-     depend on the role.
+     submits a contributor's work for formal testing. Contributors cannot
+     edit after submission while the control is Ready for Audit or awaiting QA
+     approval. Only administrators and reviewers can edit the control during
+     that period. A QA rejection marks the control Failing and returns it to
+     the contributor for corrections.
+     The displayed actions depend on the role.
 2. **Formal Assessment**
    - **Audit Test Plan:** Select test methodology (Inquiry, Observation,
      Inspection, or Reperformance), define test steps and expected artifacts,
-     and attach a workpaper. Administrators and auditors can manage test
-     plans.
+     and attach a workpaper. Administrators and auditors can manage test plans
+     before submission; only administrators can edit them while a control is
+     submitted for audit.
    - **Audit Schedule:** Set testing cadence (None, Monthly, Quarterly,
      Bi-Annual, Annual) and next audit date.
    - **Assessment activity:** Start an assessment, record design and operating
@@ -227,14 +232,16 @@ Control status describes overall compliance workflow:
 | **Ready for Audit** | Evidence is ready for an auditor to assess. |
 | **Awaiting Approval** | An assessment has been sent for quality review. |
 | **Passing** | The completed assessment found no deficient design or operation. |
-| **Failing** | The completed assessment found deficient design or operation. |
+| **Failing** | The completed assessment found deficient design or operation, or QA returned the control for contributor corrections. |
 | **Not Applicable** | The control is excluded from the compliance-score denominator. |
 
 Design effectiveness and implementation effectiveness are separately rated
 **Effective**, **Deficient**, or **Not Tested**. A completed assessment sets
 the control to Passing unless either rating is Deficient, in which case it
 sets the control to Failing. Sending an assessment to QA moves the control to
-Awaiting Approval. Administrators can also override the status directly.
+Awaiting Approval. A QA rejection returns the control to Failing so the
+contributor can make corrections. Administrators can also override the status
+directly.
 
 ### 4.3 Risk Register
 
@@ -353,7 +360,7 @@ permission checks and the intended day-to-day responsibilities.
 | **Admin** | Own workspace configuration and access administration; oversee the complete compliance program. | Import/create controls; full control management and status override; upload and delete proof; manage tags and evidence. | Full assessment access; manage test plans; finalize QA; manage assessment history. | Create/update/delete risks and remediation tasks. | Manage users, audit logs and exports, branding, sessions, backup/restore, updates, HTTPS, and factory reset. Broad dashboard visibility. |
 | **Auditor** | Conduct independent control testing and document findings. | Read controls and evaluate them; cannot delete controls or change evidence through control edits; cannot upload/delete proof files. | Create assessments and manage an assessment while it is In Progress; manage test plans; submit for QA. | Create/update risks; create/update remediation tasks; cannot delete those records. | Can read audit logs and export audit materials; no appliance-settings administration. Dashboard shows audit and health work. |
 | **Reviewer** | Perform quality assurance on audit work and review risk/remediation items. | Read controls; review assessment results; no proof upload/delete. | Can update an assessment while it is In QA Review; cannot delete it. Cannot manage test plans. | Create/update risks and remediation tasks; cannot delete them. | No audit-log or appliance-settings access. Dashboard emphasizes QA work. |
-| **Contributor** | Supply implementation details and evidence and participate in remediation. | Read controls; update permitted control details and narrative; upload/delete proof on unlocked controls. A control already Passing or Awaiting Approval is locked for contributor evidence changes. Cannot set Passing or Not Applicable or change effectiveness ratings. | Read assessments; cannot create or manage assessments or test plans. | Read risks and POA&M tasks; cannot create, resolve, or delete tasks. | Manage own profile/password/avatar and notification preferences. No user administration, audit logs, or appliance settings. |
+| **Contributor** | Supply implementation details and evidence and participate in remediation. | Read controls; update permitted control details and narrative; upload/delete proof on unlocked controls. Controls submitted for audit and controls already Passing are locked for contributor changes until QA rejects the assessment. Cannot set Passing or Not Applicable or change effectiveness ratings. | Read assessments; cannot create or manage assessments or test plans. | Read risks and POA&M tasks; cannot create, resolve, or delete tasks. | Manage own profile/password/avatar and notification preferences. No user administration, audit logs, or appliance settings. |
 | **Executive** | Review program posture and risk information without operational control editing. | Read-oriented control and evidence access; no proof upload/delete. | Read assessments and test plans. | The interface presents the risk register as read-only; see the API/UI mismatch note below. | Can read audit logs and export audit materials. Dashboard includes executive risk/health summaries. No appliance-settings administration. |
 
 ### Permission details and important caveats
