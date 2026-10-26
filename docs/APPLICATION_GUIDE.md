@@ -118,7 +118,7 @@ overview:
 - **Risk summary and charts:** Where shown for the role, compare aggregate
   inherent and residual scores, show risk mitigation, and visualize risk
   levels. Reviewers also see the **Top Vulnerabilities** list; selecting an
-  item opens the Risk Register.
+  item opens that risk in the Risk Register's edit dialog.
 - **Queues and schedules:** Surface work such as controls ready for audit,
   assessments awaiting QA, open remediation tasks, failing controls, and
   scheduled audits. Some lists are paginated.
@@ -257,8 +257,10 @@ display.
 The create/edit dialog lets the user define the scenario and select mitigating
 controls. Selecting a cross-walked control can select its related controls as
 a group. The table compares inherent and residual risk and shows the
-compensating controls. Executive accounts are presented with a read-oriented
-view in the interface.
+compensating controls. Selecting a risk ID from the dashboard or a control's
+**Mitigates Risk** links opens that risk in the register's edit dialog for
+roles permitted to manage risks.
+Executive accounts are presented with a read-oriented view in the interface.
 
 ![Enterprise Risk Register showing risk ID, scenario, inherent score, controls, residual score, and actions](./images/risk-register.jpg)
 

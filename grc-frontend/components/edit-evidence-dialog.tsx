@@ -27,9 +27,10 @@ interface EditEvidenceDialogProps {
   onSave: (control: ComplianceControl) => void
   onRefresh?: () => void
   userRole?: string | null
+  onRiskClick?: (riskId: string) => void
 }
 
-export function EditEvidenceDialog({ control, open, onOpenChange, onSave, onRefresh, userRole }: EditEvidenceDialogProps) {
+export function EditEvidenceDialog({ control, open, onOpenChange, onSave, onRefresh, userRole, onRiskClick }: EditEvidenceDialogProps) {
   const isAuditor = userRole === "Auditor"
   const isExecutive = userRole === "Executive"
 
@@ -81,9 +82,15 @@ export function EditEvidenceDialog({ control, open, onOpenChange, onSave, onRefr
                 <AlertTriangle className="size-3.5 text-amber-500" aria-hidden="true" />
                 <span className="font-medium text-foreground">Mitigates Risk:</span>
                 {control.mitigated_risk_ids.map((rId) => (
-                  <Badge key={rId} variant="secondary" className="font-mono text-[10px] h-5 px-1.5 border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                  <button
+                    key={rId}
+                    type="button"
+                    onClick={() => onRiskClick?.(rId)}
+                    className="inline-flex h-5 items-center rounded-md border border-amber-500/20 bg-amber-500/10 px-1.5 font-mono text-[10px] text-amber-600 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-400"
+                    aria-label={`View risk ${rId} in the Risk Register`}
+                  >
                     {rId}
-                  </Badge>
+                  </button>
                 ))}
               </div>
             )}

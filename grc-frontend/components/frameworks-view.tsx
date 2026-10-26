@@ -21,9 +21,10 @@ interface FrameworksViewProps {
   onClearTarget?: () => void
   targetFilter?: "Passing" | "Failing" | "Awaiting Approval" | "All" | null
   onClearFilter?: () => void
+  onRiskClick?: (riskId: string) => void
 }
 
-export function FrameworksView({ targetControlId, onClearTarget, targetFilter, onClearFilter }: FrameworksViewProps) {
+export function FrameworksView({ targetControlId, onClearTarget, targetFilter, onClearFilter, onRiskClick }: FrameworksViewProps) {
   const [importOpen, setImportOpen] = useState(true)
   const [refreshKey, setRefreshKey] = useState(0)
   const [role, setRole] = useState<string | null>(null)
@@ -122,6 +123,7 @@ export function FrameworksView({ targetControlId, onClearTarget, targetFilter, o
         onClearTarget={onClearTarget}
         targetFilter={targetFilter}
         onClearFilter={onClearFilter}
+        onRiskClick={onRiskClick}
       />
     </div>
   )

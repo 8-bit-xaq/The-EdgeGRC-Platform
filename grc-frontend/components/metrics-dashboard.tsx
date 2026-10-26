@@ -47,7 +47,7 @@ const chartConfig = {
 interface MetricsDashboardProps {
   onControlClick?: (controlId: string) => void
   onStatusClick?: (status: "Passing" | "Failing" | "Awaiting Approval" | "All") => void
-  onRiskClick: () => void
+  onRiskClick: (riskId: string) => void
 }
 
 function DashboardPagination({ page, totalItems, onPageChange }: { page: number, totalItems: number, onPageChange: (p: number) => void }) {
@@ -410,7 +410,7 @@ export function MetricsDashboard({ onControlClick, onStatusClick, onRiskClick }:
                            <li key={risk.id} className="border-b border-border pb-3 last:border-0 last:pb-0">
                               <button
                                 type="button"
-                                onClick={onRiskClick}
+                                onClick={() => onRiskClick(risk.risk_id)}
                                 className="flex w-full items-center justify-between gap-3 rounded-md text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                 aria-label={`View ${risk.title} in the Risk Register`}
                               >

@@ -58,6 +58,7 @@ export function GrcApp({ onLogout }: GrcAppProps) {
   const [sidebarHidden, setSidebarHidden] = useState(false)
   const [role, setRole] = useState("")
   const [targetControlId, setTargetControlId] = useState<string | null>(null)
+  const [targetRiskId, setTargetRiskId] = useState<string | null>(null)
   const [targetFilter, setTargetFilter] = useState<"Passing" | "Failing" | "Awaiting Approval" | "All" | null>(null)
   
   // NEW: Onboarding State
@@ -134,6 +135,11 @@ export function GrcApp({ onLogout }: GrcAppProps) {
   function handleDashboardStatusClick(status: "Passing" | "Failing" | "Awaiting Approval" | "All") {
     setTargetFilter(status)
     navigate("frameworks")
+  }
+
+  function handleRiskClick(riskId: string) {
+    setTargetRiskId(riskId)
+    navigate("risks")
   }
 
   function completeOnboarding() {
@@ -218,16 +224,22 @@ export function GrcApp({ onLogout }: GrcAppProps) {
                       onClearTarget={() => setTargetControlId(null)}
                       targetFilter={targetFilter}
                       onClearFilter={() => setTargetFilter(null)}
+                      onRiskClick={handleRiskClick}
                     />
                   )}
                   {view === "dashboard" && (
                     <MetricsDashboard 
                       onControlClick={handleDashboardControlClick} 
                       onStatusClick={handleDashboardStatusClick}
-                      onRiskClick={() => navigate("risks")}
+                      onRiskClick={handleRiskClick}
                     />
                   )}
-                  {view === "risks" && <RiskRegister />}
+                  {view === "risks" && (
+                    <RiskRegister
+                      targetRiskId={targetRiskId}
+                      onTargetRiskHandled={() => setTargetRiskId(null)}
+                    />
+                  )}
                   {view === "users" && <UserManagement />}
                   {view === "audit" && <AuditLogs />}
                   {view === "settings" && <WorkspaceSettings />}

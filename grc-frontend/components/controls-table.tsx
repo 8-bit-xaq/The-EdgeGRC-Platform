@@ -52,6 +52,7 @@ interface ControlsTableProps {
   onClearTarget?: () => void
   targetFilter?: "Passing" | "Failing" | "Awaiting Approval" | "All" | null
   onClearFilter?: () => void
+  onRiskClick?: (riskId: string) => void
 }
 
 function StatusBadge({ status }: { status: ControlStatus }) {
@@ -79,7 +80,7 @@ function StatusBadge({ status }: { status: ControlStatus }) {
   )
 }
 
-export function ControlsTable({ targetControlId, onClearTarget, targetFilter, onClearFilter }: ControlsTableProps = {}) {
+export function ControlsTable({ targetControlId, onClearTarget, targetFilter, onClearFilter, onRiskClick }: ControlsTableProps = {}) {
   // Connect to the global cache
   const { data: controls = [], isLoading } = useControls()
   const queryClient = useQueryClient()
@@ -438,10 +439,16 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                               <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
                                 <span className="font-semibold text-foreground">Mitigates Risk: </span> 
                                 {control.mitigated_risk_ids.map(rId => (
-                                  <span key={rId} className="flex items-center gap-0.5 text-amber-600 dark:text-amber-500 font-medium bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                                  <button
+                                    key={rId}
+                                    type="button"
+                                    onClick={() => onRiskClick?.(rId)}
+                                    className="flex items-center gap-0.5 rounded border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-500"
+                                    aria-label={`View risk ${rId} in the Risk Register`}
+                                  >
                                     <AlertTriangle className="size-3" />
                                     {rId}
-                                  </span>
+                                  </button>
                                 ))}
                               </div>
                             )}
@@ -535,6 +542,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         onSave={handleSave}
         onRefresh={() => queryClient.invalidateQueries({ queryKey: ["controls"] })}
         userRole={role}
+        onRiskClick={onRiskClick}
       />
     </section>
   )

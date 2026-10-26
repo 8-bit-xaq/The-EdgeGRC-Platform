@@ -9,7 +9,7 @@
  * operations against `/api/risks/`, and role-based action gating.
  */
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Plus, ShieldCheck, Trash2, Pencil, Link2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -44,7 +44,12 @@ import { type RiskItem, getRiskLevel } from "@/lib/risks"
 import { fetchApi } from "@/lib/api"
 import { toast } from "sonner"
 
-export function RiskRegister() {
+interface RiskRegisterProps {
+  targetRiskId?: string | null
+  onTargetRiskHandled?: () => void
+}
+
+export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegisterProps) {
   const queryClient = useQueryClient()
   const [risks, setRisks] = useState<RiskItem[]>([])
   const [controls, setControls] = useState<ComplianceControl[]>([])
@@ -62,6 +67,7 @@ export function RiskRegister() {
   const [likelihood, setLikelihood] = useState("3")
   const [impact, setImpact] = useState("3")
   const [selectedControlIds, setSelectedControlIds] = useState<string[]>([])
+  const [highlightedRiskId, setHighlightedRiskId] = useState<string | null>(null)
 
   const fetchRisksAndControls = async () => {
     try {
@@ -104,7 +110,7 @@ export function RiskRegister() {
     setDialogOpen(true)
   }
 
-  const openEditDialog = (risk: RiskItem) => {
+  const openEditDialog = useCallback((risk: RiskItem) => {
     if (!canManageRisks) return
     setEditingRisk(risk)
     setRiskId(risk.risk_id)
@@ -114,7 +120,22 @@ export function RiskRegister() {
     setImpact(String(risk.inherent_impact))
     setSelectedControlIds(risk.mitigating_controls_detail?.map((c) => c.control_id || (c as any).id) || [])
     setDialogOpen(true)
-  }
+  }, [canManageRisks])
+
+  useEffect(() => {
+    if (!targetRiskId || isLoading) return
+
+    const targetRisk = risks.find((risk) => risk.risk_id === targetRiskId)
+    if (targetRisk) {
+      setHighlightedRiskId(targetRiskId)
+      document.getElementById(`risk-${targetRisk.id}`)?.scrollIntoView({
+        behavior: "smooth",
+        block: "center",
+      })
+      openEditDialog(targetRisk)
+    }
+    onTargetRiskHandled?.()
+  }, [targetRiskId, isLoading, risks, openEditDialog, onTargetRiskHandled])
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -243,7 +264,11 @@ export function RiskRegister() {
                 const residual = getRiskLevel(risk.residual_score)
 
                 return (
-                  <TableRow key={risk.id}>
+                  <TableRow
+                    key={risk.id}
+                    id={`risk-${risk.id}`}
+                    className={risk.risk_id === highlightedRiskId ? "bg-amber-500/10 outline outline-2 outline-amber-500/40" : undefined}
+                  >
                     <TableCell className="font-mono text-sm font-medium align-top">
                       {risk.risk_id}
                     </TableCell>
