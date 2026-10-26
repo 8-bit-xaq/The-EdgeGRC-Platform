@@ -10,6 +10,7 @@
  */
 
 import { useEffect, useState } from "react"
+import { useQueryClient } from "@tanstack/react-query"
 import { AlertTriangle, Plus, ShieldCheck, Trash2, Pencil, Link2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -44,6 +45,7 @@ import { fetchApi } from "@/lib/api"
 import { toast } from "sonner"
 
 export function RiskRegister() {
+  const queryClient = useQueryClient()
   const [risks, setRisks] = useState<RiskItem[]>([])
   const [controls, setControls] = useState<ComplianceControl[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -140,7 +142,11 @@ export function RiskRegister() {
       if (res.ok) {
         toast.success(editingRisk ? "Risk record updated" : "Risk created")
         setDialogOpen(false)
-        fetchRisksAndControls()
+        await Promise.all([
+          fetchRisksAndControls(),
+          queryClient.invalidateQueries({ queryKey: ["controls"] }),
+          queryClient.invalidateQueries({ queryKey: ["risks"] }),
+        ])
       } else {
         toast.error("Failed to save risk record")
       }
@@ -158,7 +164,11 @@ export function RiskRegister() {
 
       if (res.ok) {
         toast.success("Risk record deleted")
-        fetchRisksAndControls()
+        await Promise.all([
+          fetchRisksAndControls(),
+          queryClient.invalidateQueries({ queryKey: ["controls"] }),
+          queryClient.invalidateQueries({ queryKey: ["risks"] }),
+        ])
       }
     } catch {
       toast.error("Failed to delete risk")
