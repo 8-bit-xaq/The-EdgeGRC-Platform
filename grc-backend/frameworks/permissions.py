@@ -91,13 +91,16 @@ class AssessmentPermissions(BasePermission):
     - Admins: Full access.
     - Contributors: Read-only.
     - Auditors: Can create, and can only edit/delete if status is "In Progress".
-    - Reviewers: Can only edit if status is "In QA Review".
+    - Reviewers: Cannot create or delete; can update assessments in "In QA Review"
+      unless they performed the assessment.
     """
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:
             return True
         role = get_user_role(request)
-        return role in ['Admin', 'Auditor', 'Reviewer']
+        return role in ['Admin', 'Auditor'] or (
+            role == 'Reviewer' and request.method in ['PATCH', 'PUT']
+        )
 
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:
@@ -105,6 +108,12 @@ class AssessmentPermissions(BasePermission):
             
         role = get_user_role(request)
         if role == 'Admin':
+            if (
+                obj.assessor_id == request.user.id and
+                obj.status == 'In QA Review' and
+                request.data.get('status') in ['In Progress', 'Completed']
+            ):
+                return False
             return True
             
         if role == 'Auditor':
@@ -114,6 +123,11 @@ class AssessmentPermissions(BasePermission):
             
         if role == 'Reviewer':
             if request.method == 'DELETE':
+                return False
+            if (
+                obj.assessor_id == request.user.id and
+                request.data.get('status') in ['In Progress', 'Completed']
+            ):
                 return False
             return obj.status == 'In QA Review'
             
@@ -175,7 +189,7 @@ class IsAdminOrSelf(BasePermission):
 
 class RiskPermissions(BasePermission):
     """
-    - Admins, Auditors, Executives, Reviewers: Can create and update risks.
+    - Admins, Auditors, Reviewers: Can create and update risks.
     - Contributors: Read-only access.
     - Admins: Only Admins can delete risks.
     """
@@ -183,7 +197,7 @@ class RiskPermissions(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         role = get_user_role(request)
-        return role in ['Admin', 'Auditor', 'Executive', 'Reviewer']
+        return role in ['Admin', 'Auditor', 'Reviewer']
 
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:
@@ -191,19 +205,22 @@ class RiskPermissions(BasePermission):
         role = get_user_role(request)
         if request.method == 'DELETE':
             return role == 'Admin'
-        return role in ['Admin', 'Auditor', 'Executive', 'Reviewer']
+        return role in ['Admin', 'Auditor', 'Reviewer']
 
 class RemediationTaskPermissions(BasePermission):
     """
     - Admins, Auditors, Reviewers: Can create tasks.
-    - Assigned user or Admins/Auditors/Reviewers: Can update status.
+    - Admins, Auditors, Reviewers: Can update tasks.
+    - Assigned Contributors: Can update only their task status.
     - Admins: Only Admins can delete tasks.
     """
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:
             return True
         role = get_user_role(request)
-        return role in ['Admin', 'Auditor', 'Reviewer']
+        return role in ['Admin', 'Auditor', 'Reviewer'] or (
+            role == 'Contributor' and request.method in ['PATCH', 'PUT']
+        )
 
     def has_object_permission(self, request, view, obj):
         if request.method in SAFE_METHODS:

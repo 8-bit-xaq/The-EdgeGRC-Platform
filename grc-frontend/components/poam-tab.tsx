@@ -4,8 +4,8 @@
  * @fileoverview Plan of Action and Milestones (POA&M) remediation tracker component.
  *
  * Enables creating, tracking, and completing corrective action items for deficient
- * controls via `/api/tasks/`. Enforces role-based permissions to ensure read-only
- * viewers (Auditors, Executives) cannot modify remediation milestones.
+ * controls via `/api/tasks/`. Contributors can update only the status of tasks
+ * assigned to them; task creation remains limited to Admins, Auditors, and Reviewers.
  */
 
 import { useEffect, useState } from "react"
@@ -25,6 +25,7 @@ interface PoamTabProps {
 }
 
 export function PoamTab({ control, role }: PoamTabProps) {
+  const [username, setUsername] = useState("")
   const isAdmin = role === "Admin"
   const isAuditor = role === "Auditor"
   const isReviewer = role === "Reviewer"
@@ -34,6 +35,10 @@ export function PoamTab({ control, role }: PoamTabProps) {
   const [newTaskTitle, setNewTaskTitle] = useState("")
   const [newTaskDesc, setNewTaskDesc] = useState("")
   const [isTaskSubmitting, setIsTaskSubmitting] = useState(false)
+
+  useEffect(() => {
+    setUsername(localStorage.getItem("grc_username") || sessionStorage.getItem("grc_username") || "")
+  }, [])
 
   useEffect(() => {
     setTasks(control.remediation_tasks ?? [])
@@ -72,20 +77,20 @@ export function PoamTab({ control, role }: PoamTabProps) {
     }
   }
 
-  async function handleResolveTask(taskId: number) {
+  async function handleUpdateTaskStatus(taskId: number, status: RemediationTask["status"]) {
     try {
       const res = await fetchApi(`tasks/${taskId}/`, {
         method: "PATCH",
-        body: JSON.stringify({ status: "Resolved" })
+        body: JSON.stringify({ status })
       })
       if (res.ok) {
-        setTasks(tasks.map(t => t.id === taskId ? { ...t, status: "Resolved" as const } : t))
-        toast.success("Task resolved")
+        setTasks(tasks.map(t => t.id === taskId ? { ...t, status } : t))
+        toast.success(status === "Resolved" ? "Task resolved" : "Task updated")
       } else {
         toast.error("Failed to update task status.")
       }
     } catch (err) {
-      toast.error("Network error while resolving task.")
+      toast.error("Network error while updating task status.")
     }
   }
 
@@ -136,10 +141,16 @@ export function PoamTab({ control, role }: PoamTabProps) {
                          Delete
                        </Button>
                      )}
-                     {task.status !== "Resolved" && canManageTasks && (
-                       <Button variant="secondary" size="xs" onClick={() => handleResolveTask(task.id)} className="h-7 text-[11px] gap-1.5">
+                     {task.status !== "Resolved" &&
+                       (canManageTasks || (role === "Contributor" && task.assigned_to_username === username)) && (
+                       <Button
+                         variant="secondary"
+                         size="xs"
+                         onClick={() => handleUpdateTaskStatus(task.id, task.status === "Open" ? "In Progress" : "Resolved")}
+                         className="h-7 text-[11px] gap-1.5"
+                       >
                          <Check className="size-3" />
-                         Mark Resolved
+                         {task.status === "Open" ? "Start Task" : "Mark Resolved"}
                        </Button>
                      )}
                    </div>

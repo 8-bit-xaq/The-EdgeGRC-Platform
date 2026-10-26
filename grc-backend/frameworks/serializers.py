@@ -7,7 +7,7 @@ from .models import ActiveSession
 from django.contrib.auth.models import User
 from auditlog.models import LogEntry
 from .models import Control, Proof, Risk, UserProfile, RemediationTask, TestPlan, AssessmentActivity, Notification
-from .permissions import control_is_submitted_for_audit
+from .permissions import control_is_submitted_for_audit, get_user_role
 
 class ActiveSessionSerializer(serializers.ModelSerializer):
     # Map model fields to React's expected property names
@@ -76,6 +76,15 @@ class RemediationTaskSerializer(serializers.ModelSerializer):
             'requested_by', 'requested_by_username',
             'due_date', 'status', 'created_at', 'updated_at'
         ]
+
+    def update(self, instance, validated_data):
+        request = self.context.get('request')
+        if request and get_user_role(request) == 'Contributor':
+            if set(validated_data) != {'status'}:
+                raise serializers.ValidationError("Assigned contributors may only update task status.")
+            if instance.assigned_to_id != request.user.id:
+                raise serializers.ValidationError("Only the assigned contributor may update this task.")
+        return super().update(instance, validated_data)
 
 class TestPlanSerializer(serializers.ModelSerializer):
     attachment_name = serializers.SerializerMethodField()

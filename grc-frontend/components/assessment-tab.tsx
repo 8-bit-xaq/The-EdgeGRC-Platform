@@ -69,6 +69,11 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
   const [auditOp, setAuditOp] = useState<EffectivenessStatus>("Not Tested")
   const [auditNotes, setAuditNotes] = useState("")
   const [isSavingAssessment, setIsSavingAssessment] = useState(false)
+  const [currentUsername, setCurrentUsername] = useState("")
+  const canReviewActiveAssessment =
+    (isAdmin || isReviewer) &&
+    Boolean(currentUsername) &&
+    activeAssessment?.assessor_username !== currentUsername
   const hasAssessmentInQaReview =
     activeAssessment?.status === "In QA Review" ||
     (control.assessments?.some(assessment => assessment.status === "In QA Review") ?? false)
@@ -82,6 +87,10 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [adminPassword, setAdminPassword] = useState("")
   const [isClearingHistory, setIsClearingHistory] = useState(false)
+
+  useEffect(() => {
+    setCurrentUsername(localStorage.getItem("grc_username") || sessionStorage.getItem("grc_username") || "")
+  }, [])
 
   useEffect(() => {
     // Scheduling
@@ -573,7 +582,7 @@ export function AssessmentTab({ control, role, onRefresh, onStatusChange }: Asse
                     </>
                   )}
 
-                  {(isAdmin || isReviewer) && activeAssessment.status === "In QA Review" && (
+                  {canReviewActiveAssessment && activeAssessment.status === "In QA Review" && (
                     <>
                       <Button variant="destructive" onClick={() => handleUpdateAssessment("In Progress")} disabled={isSavingAssessment}>
                         Reject to Auditor

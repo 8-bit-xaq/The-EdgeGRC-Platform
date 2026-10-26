@@ -2,13 +2,22 @@ from django.test import SimpleTestCase, TestCase
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth.models import User
+from rest_framework import serializers
 from unittest.mock import Mock, patch
 import io
 import zipfile
 from types import SimpleNamespace
 
 from .models import AssessmentActivity, Control, validate_secure_upload
-from .permissions import ControlMatrixPermissions, EvidenceUploadPermissions, TestPlanPermissions
+from .serializers import RemediationTaskSerializer
+from .permissions import (
+    AssessmentPermissions,
+    ControlMatrixPermissions,
+    EvidenceUploadPermissions,
+    RemediationTaskPermissions,
+    RiskPermissions,
+    TestPlanPermissions,
+)
 
 
 class SecureUploadValidationTests(TestCase):
@@ -115,3 +124,87 @@ class RejectedAssessmentControlStateTests(TestCase):
             data={},
         )
         self.assertTrue(ControlMatrixPermissions().has_object_permission(request, SimpleNamespace(), control))
+
+
+class RolePermissionAlignmentTests(SimpleTestCase):
+    @staticmethod
+    def make_user(role, user_id=1):
+        return SimpleNamespace(
+            id=user_id,
+            is_superuser=role == "Admin",
+            is_authenticated=True,
+            profile=SimpleNamespace(role=role),
+        )
+
+    def test_executives_cannot_write_risks(self):
+        request = SimpleNamespace(method="POST", user=self.make_user("Executive"))
+
+        self.assertFalse(RiskPermissions().has_permission(request, SimpleNamespace()))
+
+    def test_reviewers_cannot_create_assessments_but_can_update_qa(self):
+        reviewer = self.make_user("Reviewer")
+        permissions = AssessmentPermissions()
+        view = SimpleNamespace()
+        assessment = SimpleNamespace(status="In QA Review", assessor_id=2)
+
+        self.assertFalse(permissions.has_permission(SimpleNamespace(method="POST", user=reviewer), view))
+        self.assertTrue(permissions.has_permission(SimpleNamespace(method="PATCH", user=reviewer), view))
+        self.assertTrue(permissions.has_object_permission(
+            SimpleNamespace(method="PATCH", user=reviewer, data={"status": "Completed"}),
+            view,
+            assessment,
+        ))
+
+    def test_assessors_cannot_approve_their_own_assessment(self):
+        reviewer = self.make_user("Reviewer", user_id=12)
+        assessment = SimpleNamespace(status="In QA Review", assessor_id=12)
+        request = SimpleNamespace(method="PATCH", user=reviewer, data={"status": "Completed"})
+
+        self.assertFalse(AssessmentPermissions().has_object_permission(request, SimpleNamespace(), assessment))
+
+    def test_admin_cannot_approve_their_own_assessment(self):
+        admin = self.make_user("Admin", user_id=12)
+        assessment = SimpleNamespace(status="In QA Review", assessor_id=12)
+        request = SimpleNamespace(method="PATCH", user=admin, data={"status": "Completed"})
+
+        self.assertFalse(AssessmentPermissions().has_object_permission(request, SimpleNamespace(), assessment))
+
+    def test_assigned_contributor_can_only_update_their_task(self):
+        contributor = self.make_user("Contributor", user_id=25)
+        assigned_task = SimpleNamespace(assigned_to=contributor)
+        other_task = SimpleNamespace(assigned_to=self.make_user("Contributor", user_id=26))
+        permission = RemediationTaskPermissions()
+        view = SimpleNamespace()
+        request = SimpleNamespace(method="PATCH", user=contributor)
+
+        self.assertTrue(permission.has_permission(request, view))
+        self.assertTrue(permission.has_object_permission(request, view, assigned_task))
+        self.assertFalse(permission.has_object_permission(request, view, other_task))
+
+    def test_contributor_task_serializer_accepts_status_only(self):
+        contributor = self.make_user("Contributor", user_id=25)
+        task = SimpleNamespace(assigned_to_id=25, status="Open", save=Mock())
+        serializer = RemediationTaskSerializer(
+            task,
+            data={"status": "In Progress"},
+            partial=True,
+            context={"request": SimpleNamespace(user=contributor)},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        serializer.save()
+        self.assertEqual(task.status, "In Progress")
+
+    def test_contributor_task_serializer_rejects_other_fields(self):
+        contributor = self.make_user("Contributor", user_id=25)
+        task = SimpleNamespace(assigned_to_id=25, status="Open", save=Mock())
+        serializer = RemediationTaskSerializer(
+            task,
+            data={"title": "Changed task title"},
+            partial=True,
+            context={"request": SimpleNamespace(user=contributor)},
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        with self.assertRaises(serializers.ValidationError):
+            serializer.save()

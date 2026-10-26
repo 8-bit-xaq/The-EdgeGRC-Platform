@@ -202,13 +202,14 @@ cross-walked control IDs and linked risk IDs when present. It has three tabs:
      Bi-Annual, Annual) and next audit date.
    - **Assessment activity:** Start an assessment, record design and operating
      effectiveness, and add auditor notes. Auditors can submit an assessment
-     for QA; a reviewer or administrator can finalize it. Completed
-     assessments are retained as history.
+     for QA; a reviewer or administrator who did not perform the assessment can
+     reject or finalize it. Completed assessments are retained as history.
 3. **POA&M**
    - Lists corrective tasks for this control, their descriptions, status,
      requester, and creation date.
-   - Authorized users can create tasks; permitted users can mark a task
-     resolved. Administrators can delete tasks.
+   - Administrators, auditors, and reviewers can create tasks and update their
+     status. Contributors can start or resolve only tasks assigned to them.
+     Administrators can delete tasks.
 
 ![Control detail dialog showing evidence narrative, status, tags, and proof-file actions](./images/control-detail.jpg)
 
@@ -357,26 +358,19 @@ permission checks and the intended day-to-day responsibilities.
 
 | Role | Typical responsibility | Controls and evidence | Assessments and test plans | Risks and POA&M | Administration and visibility |
 |---|---|---|---|---|---|
-| **Admin** | Own workspace configuration and access administration; oversee the complete compliance program. | Import/create controls; full control management and status override; upload and delete proof; manage tags and evidence. | Full assessment access; manage test plans; finalize QA; manage assessment history. | Create/update/delete risks and remediation tasks. | Manage users, audit logs and exports, branding, sessions, backup/restore, updates, HTTPS, and factory reset. Broad dashboard visibility. |
+| **Admin** | Own workspace configuration and access administration; oversee the complete compliance program. | Import/create controls; full control management and status override; upload and delete proof; manage tags and evidence. | Full assessment access; manage test plans; finalize QA only for assessments performed by another user; manage assessment history. | Create/update/delete risks and remediation tasks. | Manage users, audit logs and exports, branding, sessions, backup/restore, updates, HTTPS, and factory reset. Broad dashboard visibility. |
 | **Auditor** | Conduct independent control testing and document findings. | Read controls and evaluate them; cannot delete controls or change evidence through control edits; cannot upload/delete proof files. | Create assessments and manage an assessment while it is In Progress; manage test plans; submit for QA. | Create/update risks; create/update remediation tasks; cannot delete those records. | Can read audit logs and export audit materials; no appliance-settings administration. Dashboard shows audit and health work. |
-| **Reviewer** | Perform quality assurance on audit work and review risk/remediation items. | Read controls; review assessment results; no proof upload/delete. | Can update an assessment while it is In QA Review; cannot delete it. Cannot manage test plans. | Create/update risks and remediation tasks; cannot delete them. | No audit-log or appliance-settings access. Dashboard emphasizes QA work. |
-| **Contributor** | Supply implementation details and evidence and participate in remediation. | Read controls; update permitted control details and narrative; upload/delete proof on unlocked controls. Controls submitted for audit and controls already Passing are locked for contributor changes until QA rejects the assessment. Cannot set Passing or Not Applicable or change effectiveness ratings. | Read assessments; cannot create or manage assessments or test plans. | Read risks and POA&M tasks; cannot create, resolve, or delete tasks. | Manage own profile/password/avatar and notification preferences. No user administration, audit logs, or appliance settings. |
-| **Executive** | Review program posture and risk information without operational control editing. | Read-oriented control and evidence access; no proof upload/delete. | Read assessments and test plans. | The interface presents the risk register as read-only; see the API/UI mismatch note below. | Can read audit logs and export audit materials. Dashboard includes executive risk/health summaries. No appliance-settings administration. |
+| **Reviewer** | Perform quality assurance on audit work and review risk/remediation items. | Read controls; review assessment results; no proof upload/delete. | Cannot create assessments; can reject or finalize an In QA Review assessment performed by another user. Cannot delete assessments or manage test plans. | Create/update risks and remediation tasks; cannot delete them. | No audit-log or appliance-settings access. Dashboard emphasizes QA work. |
+| **Contributor** | Supply implementation details and evidence and participate in remediation. | Read controls; update permitted control details and narrative; upload/delete proof on unlocked controls. Controls submitted for audit and controls already Passing are locked for contributor changes until QA rejects the assessment. Cannot set Passing or Not Applicable or change effectiveness ratings. | Read assessments; cannot create or manage assessments or test plans. | Read risks and POA&M tasks; cannot create/delete tasks. Can update the status of tasks assigned to them. | Manage own profile/password/avatar and notification preferences. No user administration, audit logs, or appliance settings. |
+| **Executive** | Review program posture and risk information without operational control editing. | Read-oriented control and evidence access; no proof upload/delete. | Read assessments and test plans. | Read-only Risk Register access. | Can read audit logs and export audit materials. Dashboard includes executive risk/health summaries. No appliance-settings administration. |
 
 ### Permission details and important caveats
 
 - The API, not a hidden or disabled button, is the final authority. A
   user-facing action can be visible while a server request is still rejected.
-- There are known differences between the current interface and server-side
-  permission checks:
-  - The Risk Register is read-only for Contributors and Executives. The risk
-    API allows Executive create/update requests even though the interface hides
-    those actions; delete remains Admin-only.
-  - The assessment API's create endpoint permits Reviewer requests even though
-    the interface's normal Reviewer workflow is QA review of an assessment
-    already in progress.
-  - Some non-admin/non-auditor roles may see control edit affordances even
-    though the API restricts which fields they may change.
+- The API enforces these permissions independently of the UI. Administrators
+  retain broad access, but cannot approve or reject an assessment they
+  performed. Assigned Contributors may change only their POA&M task status.
 - Therefore, if an action fails with a permission error, the role's API
   permissions take precedence over what the interface appears to offer.
 - All roles can generally read the control, risk, task, assessment, and
