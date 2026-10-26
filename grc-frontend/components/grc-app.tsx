@@ -224,6 +224,7 @@ export function GrcApp({ onLogout }: GrcAppProps) {
                     <MetricsDashboard 
                       onControlClick={handleDashboardControlClick} 
                       onStatusClick={handleDashboardStatusClick}
+                      onRiskClick={() => navigate("risks")}
                     />
                   )}
                   {view === "risks" && <RiskRegister />}

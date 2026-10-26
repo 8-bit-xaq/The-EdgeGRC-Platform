@@ -117,7 +117,8 @@ overview:
   Deficient, or Not Tested for operation/implementation.
 - **Risk summary and charts:** Where shown for the role, compare aggregate
   inherent and residual scores, show risk mitigation, and visualize risk
-  levels.
+  levels. Reviewers also see the **Top Vulnerabilities** list; selecting an
+  item opens the Risk Register.
 - **Queues and schedules:** Surface work such as controls ready for audit,
   assessments awaiting QA, open remediation tasks, failing controls, and
   scheduled audits. Some lists are paginated.

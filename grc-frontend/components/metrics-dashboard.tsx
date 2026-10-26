@@ -47,6 +47,7 @@ const chartConfig = {
 interface MetricsDashboardProps {
   onControlClick?: (controlId: string) => void
   onStatusClick?: (status: "Passing" | "Failing" | "Awaiting Approval" | "All") => void
+  onRiskClick: () => void
 }
 
 function DashboardPagination({ page, totalItems, onPageChange }: { page: number, totalItems: number, onPageChange: (p: number) => void }) {
@@ -82,7 +83,7 @@ function DashboardPagination({ page, totalItems, onPageChange }: { page: number,
   )
 }
 
-export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashboardProps) {
+export function MetricsDashboard({ onControlClick, onStatusClick, onRiskClick }: MetricsDashboardProps) {
   // 1. Fetch data utilizing the shared React Query cache
   const { data: controls = [], isLoading: loadingControls } = useControls()
   const { data: risks = [], isLoading: loadingRisks } = useRisks()
@@ -107,6 +108,7 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
 
   // RBAC Visibility Flags
   const showRisk = role === "Admin" || role === "Executive"
+  const showTopVulnerabilities = showRisk || role === "Reviewer"
   const showHealth = role === "Admin" || role === "Executive" || role === "Auditor"
   const showQA = role === "Admin" || role === "Reviewer"
   const showAuditInbox = role === "Admin" || role === "Auditor" || role === "Executive"
@@ -338,9 +340,10 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
       )}
 
       {/* Risk Matrix Row */}
-      {showRisk && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
+      {(showRisk || showTopVulnerabilities) && (
+        <div className={cn("grid gap-4", showRisk && showTopVulnerabilities ? "md:grid-cols-2" : "grid-cols-1")}>
+          {showRisk && (
+            <Card>
             <CardHeader>
               <CardTitle className="text-base">Inherent Risk Matrix</CardTitle>
               <CardDescription className="text-xs">Current threat landscape before mitigations.</CardDescription>
@@ -384,8 +387,10 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
                 </div>
               </div>
             </CardContent>
-          </Card>
+            </Card>
+          )}
 
+          {showTopVulnerabilities && (
           <Card className="flex flex-col">
             <CardHeader>
                <CardTitle className="text-base flex items-center gap-2">
@@ -402,14 +407,21 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
                      {metrics.topVulnerabilities.slice((vulnPage - 1) * 5, vulnPage * 5).map((risk) => {
                         const resLevel = getRiskLevel(risk.residual_score)
                         return (
-                           <li key={risk.id} className="flex items-center justify-between border-b border-border pb-3 last:border-0 last:pb-0">
-                              <div className="min-w-0 pr-4">
-                                 <p className="text-sm font-medium text-foreground truncate">{risk.title}</p>
-                                 <p className="text-xs text-muted-foreground font-mono mt-0.5">{risk.risk_id}</p>
-                              </div>
-                              <Badge variant="outline" className={cn("shrink-0 whitespace-nowrap", resLevel.badge)}>
-                                 {resLevel.label} ({risk.residual_score})
-                              </Badge>
+                           <li key={risk.id} className="border-b border-border pb-3 last:border-0 last:pb-0">
+                              <button
+                                type="button"
+                                onClick={onRiskClick}
+                                className="flex w-full items-center justify-between gap-3 rounded-md text-left hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                aria-label={`View ${risk.title} in the Risk Register`}
+                              >
+                                <span className="min-w-0 pr-1">
+                                   <span className="block truncate text-sm font-medium text-foreground">{risk.title}</span>
+                                   <span className="mt-0.5 block text-xs font-mono text-muted-foreground">{risk.risk_id}</span>
+                                </span>
+                                <Badge variant="outline" className={cn("shrink-0 whitespace-nowrap", resLevel.badge)}>
+                                   {resLevel.label} ({risk.residual_score})
+                                </Badge>
+                              </button>
                            </li>
                         )
                      })}
@@ -418,6 +430,7 @@ export function MetricsDashboard({ onControlClick, onStatusClick }: MetricsDashb
             </CardContent>
             <DashboardPagination page={vulnPage} totalItems={metrics.topVulnerabilities.length} onPageChange={setVulnPage} />
           </Card>
+          )}
         </div>
       )}
 
