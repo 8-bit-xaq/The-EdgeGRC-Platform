@@ -58,10 +58,6 @@ export function NotificationsProvider({ children }: { children: React.ReactNode 
   const unreadCount = notifications.filter((n) => !n.read).length
 
   const fetchNotifications = async () => {
-    // Check for token locally to prevent polling 401s when logged out
-    const token = localStorage.getItem("grc_token") || sessionStorage.getItem("grc_token")
-    if (!token) return
-
     try {
       const res = await fetchApi("notifications/")
       if (res.ok) {
