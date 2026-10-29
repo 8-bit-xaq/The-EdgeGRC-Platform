@@ -48,6 +48,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { useOrganization } from "@/lib/organization"
 import { fetchApi } from "@/lib/api"
+import { DeviceLogs } from "@/components/device-logs"
 
 interface SessionRow {
   id: string
@@ -539,6 +540,7 @@ export function WorkspaceSettings() {
         <TabsList className="w-full justify-start sm:w-fit">
           {isAdmin && <TabsTrigger value="organization">Organization</TabsTrigger>}
           <TabsTrigger value="security">Security &amp; Access</TabsTrigger>
+          {isAdmin && <TabsTrigger value="device-logs">Device Logs</TabsTrigger>}
         </TabsList>
 
         {/* Organization Tab */}
@@ -863,6 +865,12 @@ export function WorkspaceSettings() {
             </>
           )}
         </TabsContent>
+
+        {isAdmin && (
+          <TabsContent value="device-logs">
+            <DeviceLogs />
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Danger Zone */}

@@ -74,6 +74,7 @@ from .permissions import (
     RemediationTaskPermissions,
     AuditLogPermissions,
     control_is_submitted_for_audit,
+    get_user_role,
 )
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
@@ -232,6 +233,46 @@ class AuditLogListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, AuditLogPermissions]
     queryset = LogEntry.objects.select_related('actor').order_by('-timestamp')
     serializer_class = LogEntrySerializer
+
+
+class DeviceLogView(APIView):
+    """Returns a bounded tail of backend operational logs to administrators."""
+    permission_classes = [IsAuthenticated]
+    max_log_bytes = 1024 * 1024
+    max_log_lines = 500
+
+    def get(self, request):
+        if get_user_role(request) != 'Admin':
+            return Response(
+                {"error": "Only Administrators can view device logs."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        log_path = settings.LOGS_DIR / 'grc-backend.log'
+        try:
+            with log_path.open('rb') as log_file:
+                log_file.seek(0, os.SEEK_END)
+                file_size = log_file.tell()
+                start = max(0, file_size - self.max_log_bytes)
+                log_file.seek(start)
+                content = log_file.read(self.max_log_bytes)
+        except OSError:
+            return Response(
+                {"error": "The backend log file is not available or could not be read."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+
+        lines = content.decode('utf-8', errors='replace').splitlines()
+        if start and lines:
+            lines = lines[1:]
+        truncated = start > 0 or len(lines) > self.max_log_lines
+        lines = lines[-self.max_log_lines:]
+
+        return Response({
+            "logs": lines,
+            "count": len(lines),
+            "truncated": truncated,
+        })
 
 
 class UserCreateView(generics.ListCreateAPIView):

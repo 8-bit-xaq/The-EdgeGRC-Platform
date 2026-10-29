@@ -321,8 +321,9 @@ level.
 
 ### 4.6 Settings
 
-The Settings screen has two tabs: **Organization** (administrators only) and
-**Security & Access**.
+The Settings screen includes **Organization**, **Security & Access**, and
+**Device Logs** tabs for administrators. Other roles see only **Security &
+Access**.
 
 #### Organization
 
@@ -344,6 +345,12 @@ Administrator-only appliance actions include:
 These operations affect the appliance or stored data. They should be used
 only by authorized administrators and with an appropriate backup/maintenance
 plan.
+
+#### Device Logs
+
+Administrators can view and download up to the latest 500 lines of the appliance's
+backend operational log and refresh the view while troubleshooting. This log is
+separate from **Audit Logs**, which records formal application activity.
 
 #### Security & Access
 

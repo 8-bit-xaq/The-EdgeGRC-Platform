@@ -2,14 +2,18 @@ from django.test import SimpleTestCase, TestCase
 from django.core.exceptions import ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.contrib.auth.models import User
+from pathlib import Path
 from rest_framework import serializers
+from rest_framework.test import APIRequestFactory, force_authenticate
 from unittest.mock import Mock, patch
 import io
+import tempfile
 import zipfile
 from types import SimpleNamespace
 
 from .models import AssessmentActivity, Control, validate_secure_upload
 from .serializers import RemediationTaskSerializer
+from .views import DeviceLogView
 from .permissions import (
     AssessmentPermissions,
     ControlMatrixPermissions,
@@ -43,6 +47,53 @@ class SecureUploadValidationTests(TestCase):
 
         with self.assertRaises(ValidationError):
             validate_secure_upload(upload)
+
+
+class DeviceLogViewTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username="device-log-admin")
+        self.admin.profile.role = "Admin"
+        self.admin.profile.save()
+        self.auditor = User.objects.create_user(username="device-log-auditor")
+        self.auditor.profile.role = "Auditor"
+        self.auditor.profile.save()
+        self.factory = APIRequestFactory()
+
+    def test_admin_can_read_backend_log_lines(self):
+        with tempfile.TemporaryDirectory() as log_dir:
+            log_path = Path(log_dir) / "grc-backend.log"
+            log_path.write_text("INFO startup\nWARNING delayed task\n", encoding="utf-8")
+            with patch("frameworks.views.settings.LOGS_DIR", Path(log_dir)):
+                request = self.factory.get("/api/system/device-logs/")
+                force_authenticate(request, user=self.admin)
+                response = DeviceLogView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["logs"], ["INFO startup", "WARNING delayed task"])
+        self.assertEqual(response.data["count"], 2)
+
+    def test_admin_receives_only_the_latest_500_lines(self):
+        with tempfile.TemporaryDirectory() as log_dir:
+            log_path = Path(log_dir) / "grc-backend.log"
+            log_path.write_text("".join(f"line {number}\n" for number in range(501)), encoding="utf-8")
+            with patch("frameworks.views.settings.LOGS_DIR", Path(log_dir)):
+                request = self.factory.get("/api/system/device-logs/")
+                force_authenticate(request, user=self.admin)
+                response = DeviceLogView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 500)
+        self.assertEqual(response.data["logs"][0], "line 1")
+        self.assertEqual(response.data["logs"][-1], "line 500")
+        self.assertTrue(response.data["truncated"])
+
+    def test_non_admin_cannot_read_backend_logs(self):
+        request = self.factory.get("/api/system/device-logs/")
+        force_authenticate(request, user=self.auditor)
+
+        response = DeviceLogView.as_view()(request)
+
+        self.assertEqual(response.status_code, 403)
 
 
 class ControlQaLockPermissionTests(SimpleTestCase):
