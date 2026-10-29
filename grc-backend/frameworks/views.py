@@ -267,12 +267,16 @@ class DeviceLogView(APIView):
         if start and lines:
             lines = lines[1:]
         truncated = start > 0 or len(lines) > self.max_log_lines
-        lines = [sanitize_log_line(line) for line in lines[-self.max_log_lines:]]
+        lines = lines[-self.max_log_lines:]
+        unsanitized = request.query_params.get('view') == 'unsanitized'
+        if not unsanitized:
+            lines = [sanitize_log_line(line) for line in lines]
 
         return Response({
             "logs": lines,
             "count": len(lines),
             "truncated": truncated,
+            "view": "unsanitized" if unsanitized else "sanitized",
         })
 
 

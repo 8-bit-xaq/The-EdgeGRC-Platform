@@ -354,7 +354,11 @@ separate from **Audit Logs**, which records formal application activity. The
 device-log view redacts common credentials, contact details, IP addresses, and
 user/device identifiers before display and download. Redaction is best-effort;
 administrators should review the exported file before sharing it because it
-cannot guarantee removal of every sensitive value.
+cannot guarantee removal of every sensitive value. Administrators may explicitly
+switch to the unsanitized view after acknowledging a warning. Raw logs can contain
+credentials and personal information; the view and download are clearly marked
+**UNSANITIZED** and must be handled securely. Unsanitized logs should not be sent
+for support without reviewing and approving their contents.
 
 #### Security & Access
 

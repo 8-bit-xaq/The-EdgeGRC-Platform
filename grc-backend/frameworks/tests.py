@@ -77,6 +77,7 @@ class DeviceLogViewTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["logs"][:2], ["INFO startup", "WARNING delayed task"])
         self.assertEqual(response.data["count"], 3)
+        self.assertEqual(response.data["view"], "sanitized")
         sanitized_line = response.data["logs"][2]
         for sensitive_value in ("secret-pass", "abc.def", "user@example.com", "192.0.2.10"):
             self.assertNotIn(sensitive_value, sanitized_line)
@@ -100,8 +101,22 @@ class DeviceLogViewTests(TestCase):
         self.assertEqual(response.data["logs"][-1], "line 500")
         self.assertTrue(response.data["truncated"])
 
+    def test_admin_can_request_explicit_unsanitized_logs(self):
+        raw_line = "ERROR user=alice@example.com password=secret"
+        with tempfile.TemporaryDirectory() as log_dir:
+            log_path = Path(log_dir) / "grc-backend.log"
+            log_path.write_text(raw_line, encoding="utf-8")
+            with patch("frameworks.views.settings.LOGS_DIR", Path(log_dir)):
+                request = self.factory.get("/api/system/device-logs/?view=unsanitized")
+                force_authenticate(request, user=self.admin)
+                response = DeviceLogView.as_view()(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["view"], "unsanitized")
+        self.assertEqual(response.data["logs"], [raw_line])
+
     def test_non_admin_cannot_read_backend_logs(self):
-        request = self.factory.get("/api/system/device-logs/")
+        request = self.factory.get("/api/system/device-logs/?view=unsanitized")
         force_authenticate(request, user=self.auditor)
 
         response = DeviceLogView.as_view()(request)
