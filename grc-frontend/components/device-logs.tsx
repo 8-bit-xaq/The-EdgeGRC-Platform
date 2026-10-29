@@ -72,7 +72,10 @@ export function DeviceLogs() {
           <CardTitle>Device logs</CardTitle>
           <CardDescription>
             Recent backend operational logs for troubleshooting. Up to 500 lines are
-            available here; formal activity records remain in Audit Logs.
+            available here; common credentials, contact details, IP addresses, and
+            device or user identifiers are redacted. Review the file before sharing:
+            automated redaction cannot guarantee removal of every sensitive value.
+            Formal activity records remain in Audit Logs.
           </CardDescription>
         </div>
         <div className="flex shrink-0 gap-2">

@@ -12,6 +12,7 @@ import zipfile
 from types import SimpleNamespace
 
 from .models import AssessmentActivity, Control, validate_secure_upload
+from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
 from .views import DeviceLogView
 from .permissions import (
@@ -62,15 +63,27 @@ class DeviceLogViewTests(TestCase):
     def test_admin_can_read_backend_log_lines(self):
         with tempfile.TemporaryDirectory() as log_dir:
             log_path = Path(log_dir) / "grc-backend.log"
-            log_path.write_text("INFO startup\nWARNING delayed task\n", encoding="utf-8")
+            log_path.write_text(
+                "INFO startup\nWARNING delayed task\n"
+                "ERROR password=secret-pass Authorization: Bearer abc.def "
+                "email=user@example.com remote_addr=192.0.2.10\n",
+                encoding="utf-8",
+            )
             with patch("frameworks.views.settings.LOGS_DIR", Path(log_dir)):
                 request = self.factory.get("/api/system/device-logs/")
                 force_authenticate(request, user=self.admin)
                 response = DeviceLogView.as_view()(request)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["logs"], ["INFO startup", "WARNING delayed task"])
-        self.assertEqual(response.data["count"], 2)
+        self.assertEqual(response.data["logs"][:2], ["INFO startup", "WARNING delayed task"])
+        self.assertEqual(response.data["count"], 3)
+        sanitized_line = response.data["logs"][2]
+        for sensitive_value in ("secret-pass", "abc.def", "user@example.com", "192.0.2.10"):
+            self.assertNotIn(sensitive_value, sanitized_line)
+        self.assertIn("password=[REDACTED]", sanitized_line)
+        self.assertIn("Authorization: [REDACTED]", sanitized_line)
+        self.assertIn("email=[REDACTED]", sanitized_line)
+        self.assertIn("remote_addr=[REDACTED]", sanitized_line)
 
     def test_admin_receives_only_the_latest_500_lines(self):
         with tempfile.TemporaryDirectory() as log_dir:
@@ -94,6 +107,26 @@ class DeviceLogViewTests(TestCase):
         response = DeviceLogView.as_view()(request)
 
         self.assertEqual(response.status_code, 403)
+
+    def test_sanitizer_redacts_url_credentials_tokens_and_identifiers(self):
+        line = (
+            "connect https://alice:secret@appliance.local "
+            "grc_token=abc123 username=alice contact alice@example.com "
+            "peer=2001:db8::1"
+        )
+
+        sanitized = sanitize_log_line(line)
+
+        for sensitive_value in (
+            "alice:secret",
+            "abc123",
+            "username=alice",
+            "alice@example.com",
+            "2001:db8::1",
+        ):
+            self.assertNotIn(sensitive_value, sanitized)
+        self.assertIn("https://[REDACTED]@appliance.local", sanitized)
+        self.assertIn("peer=[REDACTED_IP]", sanitized)
 
 
 class ControlQaLockPermissionTests(SimpleTestCase):

@@ -350,7 +350,11 @@ plan.
 
 Administrators can view and download up to the latest 500 lines of the appliance's
 backend operational log and refresh the view while troubleshooting. This log is
-separate from **Audit Logs**, which records formal application activity.
+separate from **Audit Logs**, which records formal application activity. The
+device-log view redacts common credentials, contact details, IP addresses, and
+user/device identifiers before display and download. Redaction is best-effort;
+administrators should review the exported file before sharing it because it
+cannot guarantee removal of every sensitive value.
 
 #### Security & Access
 

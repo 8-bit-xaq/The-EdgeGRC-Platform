@@ -62,6 +62,7 @@ import sqlite3
 import tempfile
 
 from .services.pdf_generator import generate_audit_pdf
+from .log_sanitizer import sanitize_log_line
 
 from .permissions import (
     IsAdminUserOrReadOnly, 
@@ -266,7 +267,7 @@ class DeviceLogView(APIView):
         if start and lines:
             lines = lines[1:]
         truncated = start > 0 or len(lines) > self.max_log_lines
-        lines = lines[-self.max_log_lines:]
+        lines = [sanitize_log_line(line) for line in lines[-self.max_log_lines:]]
 
         return Response({
             "logs": lines,
