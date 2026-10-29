@@ -11,6 +11,11 @@ def configure_sqlite_wal(sender, connection, **kwargs):
         cursor.close()
 
 def create_factory_default_admin(sender, **kwargs):
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == 'test':
+        return
+
     from django.contrib.auth.models import User
     from django.conf import settings
     import os

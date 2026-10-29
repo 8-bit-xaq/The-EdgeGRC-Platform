@@ -36,13 +36,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     this.setState({ hasError: false, error: null })
   }
 
-  public render() {
+  public render(): ReactNode {
     if (this.state.hasError) {
-      if (typeof this.props.fallback === 'function' && this.state.error) {
-        return this.props.fallback(this.state.error, this.resetError)
-      }
-
-      if (this.props.fallback) {
+      if (typeof this.props.fallback === 'function') {
+        if (this.state.error) {
+          return this.props.fallback(this.state.error, this.resetError)
+        }
+      } else if (this.props.fallback) {
         return this.props.fallback
       }
 
@@ -96,4 +96,3 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return this.props.children
   }
 }
-

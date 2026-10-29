@@ -123,6 +123,19 @@ Edge-GRC supports cryptographically verified updates directly through the Admin 
 
 ---
 
+## 🧪 Development Checks
+
+GitHub Actions runs CI on pull requests targeting `alpha`, `beta`, or `main`,
+and when commits are pushed to those branches. The **Backend** check validates
+Django settings and migration consistency, then runs the Django test suite.
+The **Frontend** check runs TypeScript checks, then builds the Next.js
+application.
+
+After the workflow has run once, require the **Backend** and **Frontend**
+checks to pass in each branch ruleset. CI does not deploy the application.
+
+---
+
 ## 🔒 Security Posture
 
 Edge-GRC enforces strict least-privilege principles:
@@ -137,4 +150,3 @@ Edge-GRC enforces strict least-privilege principles:
 Edge-GRC is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0-or-later)**. See the [LICENSE](LICENSE) file for the full license terms.
 
 *Commercial licensing, enterprise support agreements, and custom proprietary terms are available upon request.*
-
