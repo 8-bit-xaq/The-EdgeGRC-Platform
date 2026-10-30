@@ -179,7 +179,7 @@ export function ThirdPartyAuditExporter() {
         throw new Error(errorMsg)
       }
 
-      let blob;
+      let blob: Blob | undefined
       if (format === "zip" || format === "pdf") {
         const data = await res.json()
         if (data.task_id) {
@@ -213,6 +213,10 @@ export function ThirdPartyAuditExporter() {
         const responseData = await res.json()
         blob = new Blob([JSON.stringify(responseData.data, null, 2)], { type: "application/json" })
         setDownloadFilename(`audit-package-${Date.now()}.json`)
+      }
+
+      if (!blob) {
+        throw new Error("The export completed without a result file.")
       }
 
       const url = URL.createObjectURL(blob)

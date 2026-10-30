@@ -76,5 +76,9 @@ PCI-DSS-v4.0.1-prioritized-approach.json
 
 # Automations
 .github
-
+!.github/
+.github/*
+!.github/workflows/
+.github/workflows/*
+!.github/workflows/ci.yml
 

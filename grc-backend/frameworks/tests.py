@@ -11,7 +11,7 @@ import tempfile
 import zipfile
 from types import SimpleNamespace
 
-from .models import AssessmentActivity, Control, validate_secure_upload
+from .models import AssessmentActivity, Control, RemediationTask, validate_secure_upload
 from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
 from .views import DeviceLogView
@@ -282,7 +282,8 @@ class RolePermissionAlignmentTests(SimpleTestCase):
 
     def test_contributor_task_serializer_accepts_status_only(self):
         contributor = self.make_user("Contributor", user_id=25)
-        task = SimpleNamespace(assigned_to_id=25, status="Open", save=Mock())
+        task = RemediationTask(assigned_to_id=25, status="Open")
+        task.save = Mock()
         serializer = RemediationTaskSerializer(
             task,
             data={"status": "In Progress"},
@@ -296,7 +297,7 @@ class RolePermissionAlignmentTests(SimpleTestCase):
 
     def test_contributor_task_serializer_rejects_other_fields(self):
         contributor = self.make_user("Contributor", user_id=25)
-        task = SimpleNamespace(assigned_to_id=25, status="Open", save=Mock())
+        task = RemediationTask(assigned_to_id=25, status="Open")
         serializer = RemediationTaskSerializer(
             task,
             data={"title": "Changed task title"},
