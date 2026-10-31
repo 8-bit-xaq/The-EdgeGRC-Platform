@@ -10,7 +10,7 @@ Edge-GRC is a high-performance, strictly on-premise Governance, Risk, and Compli
 *   **Role-Based Access Control (RBAC):** Granular permissions for Admins, Auditors, Reviewers, and Contributors to ensure strict separation of duties.
 *   **Cryptographically Signed Updates:** Supply-chain security built-in. The appliance validates RSA-SHA256 signatures on all system updates before extracting or applying them.
 *   **Automated Audit Reporting:** Generate and export highly detailed PDF and ZIP compliance reports completely in the background without locking up the UI.
-*   **Built-in Backup & Restore:** Administrators can generate full system snapshots (database and media evidence) and restore them seamlessly via the UI.
+*   **Built-in Backup & Restore:** Administrators can generate full system snapshots (SQLite or PostgreSQL database data and media evidence) and restore them via the UI.
 *   **Self-Managed SSL:** Built-in tools for generating and deploying secure HTTPS certificates directly through the workspace settings.
 
 ---
