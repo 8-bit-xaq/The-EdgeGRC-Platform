@@ -26,6 +26,29 @@ log_warn()    { echo -e "  ${YELLOW}⚠${RESET} $1"; }
 log_error()   { echo -e "  ${RED}✖${RESET} $1"; }
 log_info()    { echo -e "  ${BLUE}ℹ${RESET} $1"; }
 
+load_postgres_config() {
+    local config_file="$1"
+    local key value
+
+    while IFS='=' read -r key value || [ -n "$key" ]; do
+        key="${key%$'\r'}"
+        value="${value%$'\r'}"
+        value="${value#\"}"
+        value="${value%\"}"
+        value="${value#\'}"
+        value="${value%\'}"
+
+        case "$key" in
+            DB_ENGINE) DB_ENGINE="$value" ;;
+            POSTGRES_DB) POSTGRES_DB="$value" ;;
+            POSTGRES_USER) POSTGRES_USER="$value" ;;
+            POSTGRES_PASSWORD) POSTGRES_PASSWORD="$value" ;;
+            POSTGRES_HOST) POSTGRES_HOST="$value" ;;
+            POSTGRES_PORT) POSTGRES_PORT="$value" ;;
+        esac
+    done < "$config_file"
+}
+
 # --- Default Configuration Variables ---
 APP_DOMAIN=""
 ADMIN_PASSWORD=""
@@ -220,6 +243,24 @@ if [ -d "$INSTALL_DIR" ] && [ -f "$INSTALL_DIR/grc-backend/manage.py" ]; then
     fi
 fi
 
+if [ "$UPGRADE_MODE" = true ] && [ -f "$INSTALL_DIR/grc-backend/configs/db.env" ]; then
+    load_postgres_config "$INSTALL_DIR/grc-backend/configs/db.env"
+    DB_ENGINE="${DB_ENGINE,,}"
+    if [ "$DB_ENGINE" != "postgres" ] && [ "$DB_ENGINE" != "postgresql" ]; then
+        log_error "Existing database configuration does not specify PostgreSQL."
+        exit 1
+    fi
+    if [ -z "$POSTGRES_PASSWORD" ]; then
+        log_error "Existing PostgreSQL configuration has no password. Restore POSTGRES_PASSWORD in $INSTALL_DIR/grc-backend/configs/db.env before upgrading."
+        exit 1
+    fi
+    if [ "$POSTGRES_HOST" = "127.0.0.1" ] || [ "$POSTGRES_HOST" = "localhost" ] || [ "$POSTGRES_HOST" = "::1" ]; then
+        POSTGRES_LOCAL=true
+    else
+        POSTGRES_LOCAL=false
+    fi
+fi
+
 # Check for port conflicts (Ports 80 and 443)
 if command -v ss >/dev/null 2>&1; then
     PORT_80_PROC=$(ss -tlpn 2>/dev/null | grep ':80 ' | awk '{print $NF}' | head -n1)
@@ -320,7 +361,6 @@ if [ "$NON_INTERACTIVE" = false ]; then
         fi
     elif [ "$UPGRADE_MODE" = true ]; then
         if [ -f "$INSTALL_DIR/grc-backend/configs/db.env" ]; then
-            DB_ENGINE="postgres"
             log_info "Upgrade mode: Preserving existing PostgreSQL configuration."
         else
             DB_ENGINE="sqlite"
