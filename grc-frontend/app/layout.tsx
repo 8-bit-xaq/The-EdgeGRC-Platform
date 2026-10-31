@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import { Inter, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import { QueryProvider } from '@/components/query-provider' // <-- IMPORT THE PROVIDER
+import { ThemeProvider } from '@/components/theme-provider'
 import { OrganizationProvider } from '@/lib/organization'
 import './globals.css'
 
@@ -40,15 +41,17 @@ export default function RootLayout({
   children: React.ReactNode
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} ${geistMono.variable} bg-background`}>
+    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${geistMono.variable} bg-background`}>
       <body className="font-sans antialiased">
         {/* WRAP THE ENTIRE APP IN THE QUERY AND ORGANIZATION PROVIDERS */}
-        <QueryProvider>
-          <OrganizationProvider>
-            {children}
-            <Toaster position="bottom-right" />
-          </OrganizationProvider>
-        </QueryProvider>
+        <ThemeProvider>
+          <QueryProvider>
+            <OrganizationProvider>
+              {children}
+              <Toaster position="bottom-right" />
+            </OrganizationProvider>
+          </QueryProvider>
+        </ThemeProvider>
       </body>
     </html>
   )
