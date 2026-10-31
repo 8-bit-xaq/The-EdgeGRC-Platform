@@ -619,6 +619,12 @@ DBEOF
     chmod 600 "$DB_ENV_FILE"
     chown www-data:www-data "$DB_ENV_FILE"
     log_success "Database environment credentials saved to ${DB_ENV_FILE}."
+    unset DATABASE_URL
+    export DB_ENGINE POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD POSTGRES_HOST POSTGRES_PORT
+else
+    rm -f "$INSTALL_DIR/grc-backend/configs/db.env"
+    unset DATABASE_URL POSTGRES_DB POSTGRES_USER POSTGRES_PASSWORD POSTGRES_HOST POSTGRES_PORT
+    export DB_ENGINE=sqlite
 fi
 
 # Run Migrations & Collect Static Assets
