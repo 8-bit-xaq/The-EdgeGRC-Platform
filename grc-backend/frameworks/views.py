@@ -626,56 +626,20 @@ RESULTS_DIR = os.path.join(settings.BASE_DIR, 'task_results')
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 def background_backup_task():
-    import io, sqlite3, tempfile, zipfile
-    from django.conf import settings
-    from django.db import connection
-    from django.core.management import call_command
+    import io, zipfile
+    from .database_backup import add_database_backup
 
     zip_buffer = io.BytesIO()
-    temp_fd, temp_db_path = tempfile.mkstemp(suffix='.sqlite3')
-    os.close(temp_fd)
-
-    try:
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # 1. Database backup based on active engine
-            if connection.vendor == 'sqlite':
-                db_path = settings.DATABASES['default']['NAME']
-                if os.path.exists(db_path):
-                    with sqlite3.connect(db_path) as source_db:
-                        with sqlite3.connect(temp_db_path) as dest_db:
-                            source_db.backup(dest_db)
-                if os.path.exists(temp_db_path):
-                    zip_file.write(temp_db_path, arcname='db.sqlite3')
-
-            # Export universal portable database.json (works for PostgreSQL and cross-engine restores)
-            temp_json = temp_db_path + '.json'
-            try:
-                with open(temp_json, 'w', encoding='utf-8') as f:
-                    call_command(
-                        'dumpdata',
-                        '--natural-foreign',
-                        '--natural-primary',
-                        exclude=['contenttypes', 'auth.permission', 'django_q', 'sessions'],
-                        stdout=f
-                    )
-                zip_file.write(temp_json, arcname='database.json')
-            except Exception as e:
-                print(f"Portable database dump warning: {e}")
-            finally:
-                if os.path.exists(temp_json):
-                    os.remove(temp_json)
-
-            # 2. Evidence media files
-            media_root = settings.MEDIA_ROOT
-            if os.path.exists(media_root):
-                for folder_name, subfolders, filenames in os.walk(media_root):
-                    for filename in filenames:
-                        file_path = os.path.join(folder_name, filename)
-                        arcname = os.path.relpath(file_path, media_root)
-                        zip_file.write(file_path, arcname=f"media/{arcname}")
-    finally:
-        if os.path.exists(temp_db_path):
-            os.remove(temp_db_path)
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        add_database_backup(zip_file)
+        # 2. Evidence media files
+        media_root = settings.MEDIA_ROOT
+        if os.path.exists(media_root):
+            for folder_name, subfolders, filenames in os.walk(media_root):
+                for filename in filenames:
+                    file_path = os.path.join(folder_name, filename)
+                    arcname = os.path.relpath(file_path, media_root)
+                    zip_file.write(file_path, arcname=f"media/{arcname}")
             
     from django.utils import timezone
     timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")

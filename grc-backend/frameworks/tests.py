@@ -7,6 +7,7 @@ from rest_framework import serializers
 from rest_framework.test import APIRequestFactory, force_authenticate
 from unittest.mock import Mock, patch
 import io
+import sqlite3
 import tempfile
 import zipfile
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ from .models import AssessmentActivity, Control, RemediationTask, validate_secur
 from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
 from .views import DeviceLogView
+from .database_backup import add_database_backup
 from .permissions import (
     AssessmentPermissions,
     ControlMatrixPermissions,
@@ -23,6 +25,69 @@ from .permissions import (
     RiskPermissions,
     TestPlanPermissions,
 )
+
+
+class DatabaseBackupArchiveTests(SimpleTestCase):
+    def test_sqlite_backup_contains_native_snapshot_and_portable_data(self):
+        archive_buffer = io.BytesIO()
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "source.sqlite3"
+            with sqlite3.connect(db_path) as source_db:
+                source_db.execute("CREATE TABLE backup_test (value TEXT)")
+                source_db.execute("INSERT INTO backup_test VALUES ('preserved')")
+
+            with (
+                patch("frameworks.database_backup.connection") as db_connection,
+                patch("frameworks.database_backup.settings.DATABASES", {"default": {"NAME": db_path}}),
+                patch("frameworks.database_backup.call_command") as dumpdata,
+            ):
+                db_connection.vendor = "sqlite"
+                dumpdata.side_effect = lambda *args, **kwargs: kwargs["stdout"].write("[]")
+                with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                    add_database_backup(archive)
+
+        with zipfile.ZipFile(archive_buffer) as archive:
+            self.assertCountEqual(archive.namelist(), ["db.sqlite3", "database.json"])
+            with tempfile.NamedTemporaryFile(suffix=".sqlite3") as restored_db:
+                restored_db.write(archive.read("db.sqlite3"))
+                restored_db.flush()
+                with sqlite3.connect(restored_db.name) as snapshot:
+                    result = snapshot.execute("SELECT value FROM backup_test").fetchone()
+            self.assertEqual(result, ("preserved",))
+        dumpdata.assert_called_once()
+
+    def test_postgresql_backup_contains_portable_database_data(self):
+        archive_buffer = io.BytesIO()
+
+        with (
+            patch("frameworks.database_backup.connection") as db_connection,
+            patch("frameworks.database_backup.call_command") as dumpdata,
+        ):
+            db_connection.vendor = "postgresql"
+            dumpdata.side_effect = lambda *args, **kwargs: kwargs["stdout"].write("[]")
+            with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                add_database_backup(archive)
+
+        with zipfile.ZipFile(archive_buffer) as archive:
+            self.assertEqual(archive.namelist(), ["database.json"])
+            self.assertEqual(archive.read("database.json"), b"[]")
+        dumpdata.assert_called_once()
+
+    def test_database_dump_failure_is_propagated(self):
+        archive_buffer = io.BytesIO()
+
+        with (
+            patch("frameworks.database_backup.connection") as db_connection,
+            patch(
+                "frameworks.database_backup.call_command",
+                side_effect=RuntimeError("database export failed"),
+            ),
+        ):
+            db_connection.vendor = "postgresql"
+            with zipfile.ZipFile(archive_buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                with self.assertRaisesMessage(RuntimeError, "database export failed"):
+                    add_database_backup(archive)
 
 
 class SecureUploadValidationTests(TestCase):

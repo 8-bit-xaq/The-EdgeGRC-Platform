@@ -7,11 +7,7 @@ Scheduled jobs executed by `grc-worker` (qcluster):
 """
 
 import os
-import io
-import sqlite3
-import tempfile
 import zipfile
-import shutil
 from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
@@ -22,8 +18,7 @@ def automated_nightly_backup():
     Saves to /opt/grc-appliance/backups/ (or settings.BASE_DIR/backups)
     and retains only the last 7 days of backups to prevent disk exhaustion.
     """
-    from django.db import connection
-    from django.core.management import call_command
+    from .database_backup import add_database_backup
 
     BACKUPS_DIR = os.path.join(settings.BASE_DIR, 'backups')
     os.makedirs(BACKUPS_DIR, exist_ok=True)
@@ -31,33 +26,10 @@ def automated_nightly_backup():
     timestamp = timezone.now().strftime("%Y%m%d_%H%M%S")
     filename = f"grc_automated_backup_{timestamp}.zip"
     file_path = os.path.join(BACKUPS_DIR, filename)
-    
-    temp_fd, temp_db_path = tempfile.mkstemp(suffix='.sqlite3')
-    os.close(temp_fd)
-    
+
     try:
         with zipfile.ZipFile(file_path, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-            # 1. Database backup based on active engine
-            if connection.vendor == 'sqlite':
-                db_path = settings.DATABASES['default']['NAME']
-                if os.path.exists(db_path):
-                    with sqlite3.connect(db_path) as source_db:
-                        with sqlite3.connect(temp_db_path) as dest_db:
-                            source_db.backup(dest_db)
-                if os.path.exists(temp_db_path):
-                    zip_file.write(temp_db_path, arcname='db.sqlite3')
-
-            # Export universal portable database.json (works for PostgreSQL and cross-engine restores)
-            temp_json = temp_db_path + '.json'
-            try:
-                with open(temp_json, 'w', encoding='utf-8') as f:
-                    call_command('dumpdata', '--natural-foreign', '--natural-primary', exclude=['contenttypes', 'auth.permission'], stdout=f)
-                zip_file.write(temp_json, arcname='database.json')
-            except Exception as e:
-                print(f"Portable database dump warning: {e}")
-            finally:
-                if os.path.exists(temp_json):
-                    os.remove(temp_json)
+            add_database_backup(zip_file)
                 
             media_root = settings.MEDIA_ROOT
             if os.path.exists(media_root):
@@ -66,9 +38,10 @@ def automated_nightly_backup():
                         f_path = os.path.join(folder_name, fname)
                         arcname = os.path.relpath(f_path, media_root)
                         zip_file.write(f_path, arcname=f"media/{arcname}")
-    finally:
-        if os.path.exists(temp_db_path):
-            os.remove(temp_db_path)
+    except Exception:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        raise
             
     # Cleanup logic: Delete backups older than 7 days
     retention_cutoff = timezone.now() - timedelta(days=7)
@@ -109,4 +82,3 @@ def maintain_database():
         except Exception as e:
             return f"PostgreSQL maintenance error: {e}"
     return "Database maintenance skipped for vendor: " + connection.vendor
-
