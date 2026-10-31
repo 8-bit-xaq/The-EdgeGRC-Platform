@@ -324,9 +324,9 @@ export function MetricsDashboard({ onControlClick, onStatusClick, onRiskClick }:
               <CardContent className="flex-1 px-2 pb-4">
                 <ChartContainer config={chartConfig} className="mx-auto w-full max-h-[190px] mt-4">
                   <BarChart data={roiData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="var(--border)" />
                     <XAxis dataKey="name" hide />
-                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "hsl(var(--muted-foreground))" }} />
+                    <YAxis tickLine={false} axisLine={false} tick={{ fontSize: 10, fill: "var(--muted-foreground)" }} />
                     <ChartTooltip cursor={{ fill: "transparent" }} content={<ChartTooltipContent />} />
                     <Legend verticalAlign="bottom" height={20} iconType="circle" wrapperStyle={{ fontSize: '10px' }} />
                     <Bar dataKey="inherent" fill="var(--color-inherent)" radius={[4, 4, 0, 0]} maxBarSize={40} />

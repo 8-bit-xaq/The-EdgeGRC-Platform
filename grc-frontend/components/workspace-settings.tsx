@@ -639,7 +639,9 @@ export function WorkspaceSettings() {
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between rounded-lg border border-border bg-muted/40 p-4">
                   <div className="space-y-1">
                     <p className="text-sm font-medium text-foreground">System Backup</p>
-                    <p className="text-sm text-muted-foreground text-balance">Downloads an encrypted ZIP containing your SQLite database and physical proof files.</p>
+                    <p className="text-sm text-muted-foreground text-balance">
+                      Downloads a ZIP with your database (SQLite or PostgreSQL) and uploaded evidence files. SQLite backups also include a native database snapshot.
+                    </p>
                   </div>
                   <Button onClick={handleBackup} disabled={isBackingUp} className="shrink-0 w-full sm:w-auto">
                     {isBackingUp ? (

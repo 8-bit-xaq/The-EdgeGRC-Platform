@@ -332,7 +332,8 @@ logo. This identity is reflected in the sidebar and branding surfaces.
 Administrator-only appliance actions include:
 
 - **System backup:** Generate a downloadable archive containing database and
-  media data.
+  uploaded evidence files. The archive includes a portable export for either
+  SQLite or PostgreSQL; SQLite backups also include a native database snapshot.
 - **Restore:** Upload a backup and confirm before restoring it.
 - **Platform update:** Upload an official update package. The backend checks
   the package signature before applying it; the appliance restarts services,
