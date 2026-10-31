@@ -371,7 +371,8 @@ export function MetricsDashboard({ onControlClick, onStatusClick, onRiskClick }:
                             className={cn(
                               "flex items-center justify-center size-10 sm:size-12 rounded-sm text-sm font-bold transition-all",
                               bgColor,
-                              count === 0 && "opacity-30 !bg-muted !text-transparent shadow-none"
+                              count === 0 &&
+                                "!bg-slate-100 !text-transparent shadow-none border border-slate-300 dark:!bg-muted dark:border-border"
                             )}
                             title={`Likelihood: ${likelihood}, Impact: ${impact} | Risks: ${count}`}
                           >
