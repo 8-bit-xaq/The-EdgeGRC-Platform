@@ -16,6 +16,7 @@ import { UserManagement } from "@/components/user-management"
 import { AuditLogs } from "@/components/audit-logs"
 import { WorkspaceSettings } from "@/components/workspace-settings"
 import { NotificationBell } from "@/components/notification-bell"
+import { ThemeSwitcher } from "@/components/theme-switcher"
 import { RiskRegister } from "@/components/risk-register"
 import { NotificationsProvider } from "@/lib/notifications"
 import { OnboardingWizard } from "@/components/onboarding-wizard"
@@ -211,6 +212,7 @@ export function GrcApp({ onLogout }: GrcAppProps) {
                 </div>
 
                 <div className="ml-auto flex items-center gap-2">
+                  <ThemeSwitcher />
                   <NotificationBell onNotificationClick={handleDashboardControlClick} />
                 </div>
               </header>

@@ -80,10 +80,12 @@ sidebar can be collapsed with the panel button in the top bar.
 ### Top bar and notifications
 
 The top bar shows the selected view's title and short description. The
-notification bell opens the signed-in user's notifications. A notification
-can be marked read or removed; notifications that point to a control can
-navigate directly to that control in Framework Management. Notification
-preferences are managed in the user profile.
+appearance selector lets users choose Light, Dark, or System (automatic,
+following the computer's theme). System is the default. The notification bell
+opens the signed-in user's notifications. A notification can be marked read or
+removed; notifications that point to a control can navigate directly to that
+control in Framework Management. Notification preferences are managed in the
+user profile.
 
 ### Common interface elements
 
