@@ -269,8 +269,8 @@ Executive accounts are presented with a read-oriented view in the interface.
 
 ![Enterprise Risk Register showing risk ID, scenario, inherent score, controls, residual score, and actions](./images/risk-register.jpg)
 
-*Risk Register in the sample workspace before risk scenarios have been
-entered.*
+*Risk Register in the sample workspace with two risk scenarios mapped to
+controls.*
 
 ### 4.4 Users & Access
 
