@@ -260,11 +260,12 @@ The create/edit dialog lets the user define the scenario and select mitigating
 controls and add an optional supporting attachment. Attachments use the
 application's secure upload rules, including a 25 MB size limit and supported
 document/file-type allowlist; choosing a new attachment replaces the existing
-one. Selecting a cross-walked control can select its related controls as a
-group. The table compares inherent and residual risk and shows the compensating
-controls. Selecting a risk ID from the dashboard or a control's **Mitigates
-Risk** links opens that risk in the register's edit dialog for roles permitted
-to manage risks.
+one. Cross-walked controls show the IDs of the related controls that will be
+selected with them. Selecting a cross-walked control can select its related
+controls as a group. The table compares inherent and residual risk and shows
+the compensating controls. Selecting a risk ID from the dashboard or a
+control's **Mitigates Risk** links opens that risk in the register's edit dialog
+for roles permitted to manage risks.
 Executive accounts are presented with a read-oriented view in the interface.
 
 ![Enterprise Risk Register showing risk ID, scenario, inherent score, controls, residual score, and actions](./images/risk-register.jpg)
