@@ -512,6 +512,12 @@ else
     cp -r grc-backend/. "$INSTALL_DIR/grc-backend/"
 fi
 
+# Stage bundled JSON framework library
+if [ -d "$REPO_DIR/Frameworks" ]; then
+    mkdir -p "$INSTALL_DIR/Frameworks"
+    cp -r "$REPO_DIR/Frameworks/." "$INSTALL_DIR/Frameworks/"
+fi
+
 # Stage Frontend Standalone Distribution
 mkdir -p "$INSTALL_DIR/grc-frontend"
 cp -r grc-frontend/.next/standalone/. "$INSTALL_DIR/grc-frontend/"

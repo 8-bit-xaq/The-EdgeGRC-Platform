@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa, utils as asym_utils
 import io
+import json
 import sqlite3
 import tempfile
 import zipfile
@@ -19,6 +20,8 @@ from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
 from .views import (
     DeviceLogView,
+    FrameworkLibraryFileView,
+    FrameworkLibraryView,
     MainBranchUpdateView,
     UpdatePackageError,
     _verify_and_start_update,
@@ -215,6 +218,106 @@ class DeviceLogViewTests(TestCase):
             self.assertNotIn(sensitive_value, sanitized)
         self.assertIn("https://[REDACTED]@appliance.local", sanitized)
         self.assertIn("peer=[REDACTED_IP]", sanitized)
+
+
+class FrameworkLibraryViewTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username="framework-library-admin")
+        self.admin.profile.role = "Admin"
+        self.admin.profile.save()
+        self.auditor = User.objects.create_user(username="framework-library-auditor")
+        self.auditor.profile.role = "Auditor"
+        self.auditor.profile.save()
+        self.factory = APIRequestFactory()
+
+    def make_request(self, view, user, path, framework_id=None):
+        request = self.factory.get(path)
+        force_authenticate(request, user=user)
+        if framework_id is None:
+            return view.as_view()(request)
+        return view.as_view()(request, framework_id=framework_id)
+
+    def test_admin_lists_bundled_framework_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_root = Path(temp_dir) / "appliance"
+            library = app_root / "Frameworks"
+            library.mkdir(parents=True)
+            (library / "pci-dss.json").write_text(
+                json.dumps({
+                    "framework": "PCI DSS v4",
+                    "description": "Payment card security",
+                    "controls": [{"id": "1.1"}, {"id": "1.2"}],
+                }),
+                encoding="utf-8",
+            )
+            (library / "notes.txt").write_text("not a framework", encoding="utf-8")
+            with patch("frameworks.views.settings.BASE_DIR", app_root / "grc-backend"):
+                response = self.make_request(
+                    FrameworkLibraryView,
+                    self.admin,
+                    "/api/framework-library/",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["frameworks"],
+            [{
+                "id": "pci-dss",
+                "name": "PCI DSS v4",
+                "description": "Payment card security",
+                "item_count": 2,
+            }],
+        )
+
+    def test_admin_can_load_framework_file_for_import(self):
+        definition = {"framework": "PCI DSS", "controls": [{"id": "1.1"}]}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_root = Path(temp_dir) / "appliance"
+            library = app_root / "Frameworks"
+            library.mkdir(parents=True)
+            (library / "pci-dss.json").write_text(json.dumps(definition), encoding="utf-8")
+            with patch("frameworks.views.settings.BASE_DIR", app_root / "grc-backend"):
+                response = self.make_request(
+                    FrameworkLibraryFileView,
+                    self.admin,
+                    "/api/framework-library/pci-dss/",
+                    "pci-dss",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, definition)
+
+    def test_non_admin_cannot_access_framework_library(self):
+        response = self.make_request(
+            FrameworkLibraryView,
+            self.auditor,
+            "/api/framework-library/",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_missing_library_returns_empty_list(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "frameworks.views.settings.BASE_DIR", Path(temp_dir) / "grc-backend"
+        ):
+            response = self.make_request(
+                FrameworkLibraryView,
+                self.admin,
+                "/api/framework-library/",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["frameworks"], [])
+
+    def test_framework_id_cannot_traverse_outside_library(self):
+        response = self.make_request(
+            FrameworkLibraryFileView,
+            self.admin,
+            "/api/framework-library/..%2Fsecret/",
+            "../secret",
+        )
+
+        self.assertEqual(response.status_code, 404)
 
 
 class MainBranchUpdateViewTests(TestCase):

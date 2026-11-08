@@ -185,7 +185,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           <>
             <CardHeader className="text-center pb-6 pt-8">
               <CardTitle className="text-2xl">Seed your First Framework</CardTitle>
-              <CardDescription className="text-base mt-2">Upload a structured JSON file containing your baseline controls (e.g. SOC 2, PCI-DSS).</CardDescription>
+              <CardDescription className="text-base mt-2">Choose a framework bundled with the appliance or upload a structured JSON file containing your baseline controls.</CardDescription>
             </CardHeader>
             <CardContent className="px-8 pb-8">
               <FrameworkUploader onImported={() => setTimeout(() => setStep(3), 2000)} />

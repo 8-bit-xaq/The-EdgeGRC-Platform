@@ -46,7 +46,8 @@ README for deployment details.
    onboarding wizard:
    - **Branding:** Set the legal company name, workspace title, and optional
      logo. The logo is resized before being saved.
-   - **Framework:** Import the initial framework as JSON.
+   - **Framework:** Choose a bundled framework or upload an initial JSON
+     framework.
    - **Complete:** Finish setup and open the dashboard.
 4. Later sign-ins take the user to the main workspace. The default initial
    view is Framework Management.
@@ -147,6 +148,13 @@ from JSON metadata when available, otherwise from the filename. Imported
 items are normalized into controls with an identifier, framework name,
 description, optional requirement grouping/process text/tags, and an initial
 Not Evaluated status.
+
+Administrators can also choose a bundled JSON framework from the appliance's
+`Frameworks/` directory. Bundled choices appear in both the Frameworks importer
+and the startup wizard, alongside the option to upload a JSON file. These
+choices stay collapsed until the user selects **Choose or upload a framework**.
+Framework files are included in fresh installations and signed platform update
+packages.
 
 After a framework is loaded, the importer collapses into a **Framework
 loaded** panel. An administrator can reopen it to add another framework. An

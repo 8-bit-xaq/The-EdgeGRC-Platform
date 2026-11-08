@@ -150,6 +150,12 @@ else
            "$STAGE_DIR/grc-frontend/.env"*
 fi
 
+# Stage bundled framework library
+if [ -d "Frameworks" ]; then
+    mkdir -p "$STAGE_DIR/Frameworks"
+    cp -r Frameworks/. "$STAGE_DIR/Frameworks/"
+fi
+
 # Stage Configuration Files
 if [ -d "configs" ]; then
     mkdir -p "$STAGE_DIR/configs"

@@ -86,6 +86,7 @@ GITHUB_REPOSITORY = "8-bit-xaq/The-EdgeGRC-Platform"
 GITHUB_API_ROOT = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
 UPDATE_PACKAGE_NAME = "update-EdgeGRC.zip"
 MAX_UPDATE_PACKAGE_SIZE = 500 * 1024 * 1024
+MAX_FRAMEWORK_FILE_SIZE = 10 * 1024 * 1024
 
 
 class GitHubUpdateError(Exception):
@@ -98,6 +99,31 @@ class UpdatePackageError(Exception):
     def __init__(self, message, status_code=status.HTTP_400_BAD_REQUEST):
         super().__init__(message)
         self.status_code = status_code
+
+
+def _framework_library_directory():
+    return os.path.join(str(settings.BASE_DIR.parent), "Frameworks")
+
+
+def _load_framework_library_file(framework_id):
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", framework_id):
+        raise FileNotFoundError
+
+    directory = os.path.realpath(_framework_library_directory())
+    file_path = os.path.join(directory, f"{framework_id}.json")
+    if os.path.dirname(os.path.realpath(file_path)) != directory or os.path.islink(file_path):
+        raise FileNotFoundError
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError
+
+    file_size = os.path.getsize(file_path)
+    if file_size > MAX_FRAMEWORK_FILE_SIZE:
+        raise ValueError("Framework files must be 10 MB or smaller.")
+    with open(file_path, encoding="utf-8") as framework_file:
+        definition = json.load(framework_file)
+    if not isinstance(definition, (dict, list)):
+        raise ValueError("Framework JSON must contain an object or array.")
+    return definition
 
 
 def _github_json(url):
@@ -1873,6 +1899,91 @@ class BulkControlImportView(APIView):
 
         except Exception as e:
             return Response({"error": f"Failed to import controls: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FrameworkLibraryView(APIView):
+    """Lists JSON frameworks bundled in the appliance Frameworks directory."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if get_user_role(request) != "Admin":
+            return Response({"error": "Only Administrators can access the framework library."}, status=status.HTTP_403_FORBIDDEN)
+
+        directory = _framework_library_directory()
+        if not os.path.isdir(directory):
+            return Response({"frameworks": []})
+
+        frameworks = []
+        try:
+            filenames = sorted(os.listdir(directory))
+            for filename in filenames:
+                if not filename.lower().endswith(".json"):
+                    continue
+                framework_id = filename[:-5]
+                try:
+                    definition = _load_framework_library_file(framework_id)
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    return Response(
+                        {"error": f"Could not read bundled framework {filename}: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                if isinstance(definition, dict):
+                    name = (
+                        definition.get("framework")
+                        or definition.get("framework_name")
+                        or definition.get("title")
+                        or definition.get("name")
+                        or framework_id.replace("-", " ").replace("_", " ")
+                    )
+                    description = definition.get("description", "")
+                    items = next(
+                        (
+                            definition[key]
+                            for key in ("controls", "requirements", "items", "policies")
+                            if isinstance(definition.get(key), list)
+                        ),
+                        [],
+                    )
+                else:
+                    name = framework_id.replace("-", " ").replace("_", " ")
+                    description = ""
+                    items = definition
+
+                frameworks.append({
+                    "id": framework_id,
+                    "name": str(name),
+                    "description": str(description),
+                    "item_count": len(items),
+                })
+        except OSError as exc:
+            return Response(
+                {"error": f"Could not read the bundled framework library: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({"frameworks": frameworks})
+
+
+class FrameworkLibraryFileView(APIView):
+    """Returns one bundled JSON framework by its safe filename identifier."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, framework_id):
+        if get_user_role(request) != "Admin":
+            return Response({"error": "Only Administrators can access the framework library."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            definition = _load_framework_library_file(framework_id)
+        except FileNotFoundError:
+            return Response({"error": "Bundled framework not found."}, status=status.HTTP_404_NOT_FOUND)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return Response(
+                {"error": f"Could not read bundled framework: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(definition)
 
 
 class HealthCheckView(APIView):
