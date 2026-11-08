@@ -338,9 +338,12 @@ Administrator-only appliance actions include:
   uploaded evidence files. The archive includes a portable export for either
   SQLite or PostgreSQL; SQLite backups also include a native database snapshot.
 - **Restore:** Upload a backup and confirm before restoring it.
-- **Platform update:** Upload an official update package. The backend checks
-  the package signature before applying it; the appliance restarts services,
-  interrupting active sessions.
+- **Platform update:** Check GitHub for the latest signed package built from
+  the repository's `main` branch, or upload an official update package
+  manually. Before installing either package, create a current system backup;
+  the automatic update requires explicit backup confirmation. The backend
+  verifies the package signature before applying it, and the appliance
+  restarts services, interrupting active sessions.
 - **HTTPS & trust:** Enable HTTPS by creating appliance certificates and
   download the public certificate for local trust configuration.
 - **Active sessions:** Inspect active devices and revoke a session.
@@ -369,11 +372,6 @@ for support without reviewing and approving their contents.
 The session timeout control describes how long an account can be inactive
 before its session expires. Administrator-only controls in this tab include
 HTTPS management and active-session management.
-
-![Organization Settings showing branding, backup and restore, platform updates, and the danger zone](./images/workspace-settings.jpg)
-
-*Administrator Organization Settings. Appliance and organization actions are
-not available to ordinary workspace roles.*
 
 ## 5. Roles and effective permissions
 

@@ -120,6 +120,9 @@ Edge-GRC supports cryptographically verified updates directly through the Admin 
 * **Integrity Guarantee:** Any altered, corrupt, or unsigned update package is rejected before execution.
 * **Non-Destructive Patching:** System updates preserve existing SQLite databases, uploaded evidence files (`media/`), SSL certificates, and appliance domain configurations.
 * **Zero Downtime Database Migrations:** Database migrations and static asset collections run automatically during update application.
+* **Main-branch updates:** Organization settings can check for and install the latest signed package built from `main`. Before installation, an administrator must confirm that a current system backup has been downloaded. Manual signed-package uploads remain available.
+
+To publish automatic main-branch packages, configure the GitHub Actions repository secret `UPDATE_SIGNING_PRIVATE_KEY` with the PEM private key matching `grc-backend/configs/update_pub.pem`. The `Signed main-branch update` workflow builds and publishes a signed package for each current `main` commit; the private key must never be committed to the repository.
 
 ---
 

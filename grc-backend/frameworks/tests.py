@@ -6,6 +6,8 @@ from pathlib import Path
 from rest_framework import serializers
 from rest_framework.test import APIRequestFactory, force_authenticate
 from unittest.mock import Mock, patch
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa, utils as asym_utils
 import io
 import sqlite3
 import tempfile
@@ -15,7 +17,13 @@ from types import SimpleNamespace
 from .models import AssessmentActivity, Control, RemediationTask, validate_secure_upload
 from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
-from .views import DeviceLogView
+from .views import (
+    DeviceLogView,
+    MainBranchUpdateView,
+    UpdatePackageError,
+    _verify_and_start_update,
+    execute_system_update,
+)
 from .database_backup import add_database_backup
 from .permissions import (
     AssessmentPermissions,
@@ -207,6 +215,194 @@ class DeviceLogViewTests(TestCase):
             self.assertNotIn(sensitive_value, sanitized)
         self.assertIn("https://[REDACTED]@appliance.local", sanitized)
         self.assertIn("peer=[REDACTED_IP]", sanitized)
+
+
+class MainBranchUpdateViewTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username="main-update-admin")
+        self.admin.profile.role = "Admin"
+        self.admin.profile.save()
+        self.auditor = User.objects.create_user(username="main-update-auditor")
+        self.auditor.profile.role = "Auditor"
+        self.auditor.profile.save()
+        self.factory = APIRequestFactory()
+        self.commit = "a" * 40
+
+    def make_request(self, method, user, data=None):
+        if method == "get":
+            request = self.factory.get("/api/update/main/")
+        else:
+            request = self.factory.post("/api/update/main/", data, format="json")
+        force_authenticate(request, user=user)
+        return MainBranchUpdateView.as_view()(request)
+
+    @patch("frameworks.views._get_main_update_asset", return_value="https://github.com/download")
+    @patch("frameworks.views._get_installed_commit", return_value=None)
+    @patch("frameworks.views._get_main_commit")
+    def test_admin_check_reports_signed_update_for_latest_main_commit(
+        self, get_main_commit, _get_installed_commit, _get_asset
+    ):
+        get_main_commit.return_value = self.commit
+
+        response = self.make_request("get", self.admin)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["available"])
+        self.assertEqual(response.data["commit"], self.commit)
+
+    @patch("frameworks.views._get_main_commit")
+    def test_non_admin_cannot_check_for_updates(self, get_main_commit):
+        response = self.make_request("get", self.auditor)
+
+        self.assertEqual(response.status_code, 403)
+        get_main_commit.assert_not_called()
+
+    @patch("frameworks.views._get_main_commit")
+    def test_install_requires_explicit_backup_confirmation(self, get_main_commit):
+        response = self.make_request(
+            "post",
+            self.admin,
+            {"confirm_backup": False, "expected_commit": self.commit},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        get_main_commit.assert_not_called()
+
+    @patch("frameworks.views._get_main_commit", return_value="b" * 40)
+    def test_install_rejects_main_commit_changed_since_check(self, get_main_commit):
+        response = self.make_request(
+            "post",
+            self.admin,
+            {"confirm_backup": True, "expected_commit": self.commit},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        get_main_commit.assert_called_once()
+
+    @patch("frameworks.views._verify_and_start_update")
+    @patch("frameworks.views._download_main_update", return_value="/tmp/main-update.zip")
+    @patch("frameworks.views._get_main_update_asset", return_value="https://github.com/download")
+    @patch("frameworks.views._get_installed_commit", return_value=None)
+    @patch("frameworks.views._get_main_commit")
+    def test_confirmed_install_downloads_and_verifies_signed_package(
+        self,
+        get_main_commit,
+        _get_installed_commit,
+        _get_asset,
+        download_update,
+        verify_update,
+    ):
+        get_main_commit.return_value = self.commit
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "frameworks.views.settings.BASE_DIR", Path(temp_dir) / "grc-backend"
+        ):
+            response = self.make_request(
+                "post",
+                self.admin,
+                {"confirm_backup": True, "expected_commit": self.commit},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        download_update.assert_called_once()
+        verify_update.assert_called_once_with(
+            "/tmp/main-update.zip",
+            expected_commit=self.commit,
+        )
+
+
+class SignedUpdateVerificationTests(SimpleTestCase):
+    def create_signed_package(self, root, payload_bytes=b"trusted payload", signed_payload=None):
+        config_dir = root / "configs"
+        config_dir.mkdir()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        (config_dir / "update_pub.pem").write_bytes(public_key)
+
+        payload_digest = hashes.Hash(hashes.SHA256())
+        payload_digest.update(signed_payload if signed_payload is not None else payload_bytes)
+        signature = private_key.sign(
+            payload_digest.finalize(),
+            padding.PKCS1v15(),
+            asym_utils.Prehashed(hashes.SHA256()),
+        )
+        package_path = root / "update.zip"
+        with zipfile.ZipFile(package_path, "w") as archive:
+            archive.writestr("payload.zip", payload_bytes)
+            archive.writestr("signature.sig", signature)
+        return package_path
+
+    @staticmethod
+    def make_main_payload(commit):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr(
+                "grc-frontend/public/version.json",
+                f'{{"version":"1.0.4","commit":"{commit}"}}',
+            )
+        return payload.getvalue()
+
+    def test_valid_signature_and_commit_schedules_verified_main_update(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            commit = "c" * 40
+            payload_bytes = self.make_main_payload(commit)
+            package_path = self.create_signed_package(root, payload_bytes=payload_bytes)
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                _verify_and_start_update(str(package_path), expected_commit=commit)
+
+            thread.assert_called_once()
+            self.assertIs(thread.call_args.kwargs["target"], execute_system_update)
+            self.assertEqual(thread.call_args.kwargs["args"][1], str(root.parent))
+            thread.return_value.start.assert_called_once()
+            verified_payload = Path(thread.call_args.kwargs["args"][0])
+            self.assertEqual(verified_payload.read_bytes(), payload_bytes)
+            verified_payload.unlink()
+
+    def test_invalid_signature_is_rejected_and_staged_payload_removed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(root, signed_payload=b"other payload")
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertEqual(error.exception.status_code, 403)
+            thread.assert_not_called()
+            self.assertEqual(
+                {path.name for path in root.iterdir()},
+                {"configs", "update.zip"},
+            )
+
+    def test_signed_package_for_different_commit_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(
+                root,
+                payload_bytes=self.make_main_payload("a" * 40),
+            )
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path), expected_commit="b" * 40)
+
+            self.assertEqual(error.exception.status_code, 403)
+            thread.assert_not_called()
+            self.assertEqual(
+                {path.name for path in root.iterdir()},
+                {"configs", "update.zip"},
+            )
 
 
 class ControlQaLockPermissionTests(SimpleTestCase):

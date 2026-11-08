@@ -38,6 +38,7 @@ from rest_framework.throttling import ScopedRateThrottle
 # ----------------------------------------------
 
 import datetime
+import re
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -60,6 +61,9 @@ import threading
 import shutil
 import sqlite3
 import tempfile
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from .services.pdf_generator import generate_audit_pdf
 from .log_sanitizer import sanitize_log_line
@@ -77,6 +81,227 @@ from .permissions import (
     control_is_submitted_for_audit,
     get_user_role,
 )
+
+GITHUB_REPOSITORY = "8-bit-xaq/The-EdgeGRC-Platform"
+GITHUB_API_ROOT = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
+UPDATE_PACKAGE_NAME = "update-EdgeGRC.zip"
+MAX_UPDATE_PACKAGE_SIZE = 500 * 1024 * 1024
+
+
+class GitHubUpdateError(Exception):
+    def __init__(self, message, status_code=status.HTTP_502_BAD_GATEWAY):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class UpdatePackageError(Exception):
+    def __init__(self, message, status_code=status.HTTP_400_BAD_REQUEST):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _github_json(url):
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Edge-GRC-Platform-Updater",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            return json.load(response)
+    except HTTPError as exc:
+        if exc.code == 404:
+            raise GitHubUpdateError("The requested GitHub update resource was not found.", 404) from exc
+        raise GitHubUpdateError(
+            f"GitHub could not be reached for update information (HTTP {exc.code})."
+        ) from exc
+    except URLError as exc:
+        raise GitHubUpdateError("Could not connect to GitHub to check for updates.") from exc
+    except (json.JSONDecodeError, OSError) as exc:
+        raise GitHubUpdateError("GitHub returned an invalid update response.") from exc
+
+
+def _get_main_commit():
+    commit_data = _github_json(f"{GITHUB_API_ROOT}/commits/main")
+    commit = commit_data.get("sha") if isinstance(commit_data, dict) else None
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
+        raise GitHubUpdateError("GitHub returned an invalid main-branch commit.")
+    return commit.lower()
+
+
+def _get_main_update_asset(commit):
+    tag = f"main-{commit}"
+    try:
+        release = _github_json(f"{GITHUB_API_ROOT}/releases/tags/{tag}")
+    except GitHubUpdateError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+
+    if not isinstance(release, dict) or release.get("tag_name") != tag:
+        return None
+    assets = release.get("assets", [])
+    if not isinstance(assets, list):
+        return None
+    for asset in assets:
+        if not isinstance(asset, dict) or asset.get("name") != UPDATE_PACKAGE_NAME:
+            continue
+        download_url = asset.get("browser_download_url")
+        parsed_url = urlparse(download_url or "")
+        if (
+            parsed_url.scheme == "https"
+            and parsed_url.hostname == "github.com"
+            and isinstance(asset.get("size"), int)
+            and 0 < asset["size"] <= MAX_UPDATE_PACKAGE_SIZE
+        ):
+            return download_url
+    return None
+
+
+def _get_installed_commit():
+    version_path = os.path.join(
+        str(settings.BASE_DIR.parent), "grc-frontend", "public", "version.json"
+    )
+    try:
+        with open(version_path, encoding="utf-8") as version_file:
+            version_data = json.load(version_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+    commit = version_data.get("commit") if isinstance(version_data, dict) else None
+    if isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
+        return commit.lower()
+    return None
+
+
+def _download_main_update(download_url, update_dir):
+    request = Request(download_url, headers={"User-Agent": "Edge-GRC-Platform-Updater"})
+    fd, zip_path = tempfile.mkstemp(prefix="main-update-", suffix=".zip", dir=update_dir)
+    completed = False
+    try:
+        with os.fdopen(fd, "wb") as package_file, urlopen(request, timeout=30) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > MAX_UPDATE_PACKAGE_SIZE:
+                raise GitHubUpdateError("The signed update package exceeds the 500 MB size limit.", 413)
+            total_size = 0
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_UPDATE_PACKAGE_SIZE:
+                    raise GitHubUpdateError("The signed update package exceeds the 500 MB size limit.", 413)
+                package_file.write(chunk)
+        if total_size == 0:
+            raise GitHubUpdateError("GitHub returned an empty update package.")
+        completed = True
+        return zip_path
+    except GitHubUpdateError:
+        raise
+    except HTTPError as exc:
+        raise GitHubUpdateError(
+            f"GitHub could not download the update package (HTTP {exc.code})."
+        ) from exc
+    except URLError as exc:
+        raise GitHubUpdateError("Could not download the signed update package from GitHub.") from exc
+    except (OSError, ValueError) as exc:
+        raise GitHubUpdateError("The signed update package could not be downloaded.") from exc
+    finally:
+        if not completed and os.path.exists(zip_path):
+            os.remove(zip_path)
+
+
+def _verify_and_start_update(zip_path, expected_commit=None):
+    update_dir = os.path.dirname(zip_path)
+    pub_key_path = os.path.join(settings.BASE_DIR, "configs", "update_pub.pem")
+    if not os.path.exists(pub_key_path):
+        raise UpdatePackageError(
+            "Update public key not found. System cannot verify updates.",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    try:
+        with open(pub_key_path, "rb") as key_file:
+            public_key = load_pem_public_key(key_file.read())
+    except (OSError, ValueError) as exc:
+        raise UpdatePackageError(
+            "Update public key is invalid. System cannot verify updates.",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc
+
+    payload_fd, payload_path = tempfile.mkstemp(prefix="verified-update-", suffix=".zip", dir=update_dir)
+    os.close(payload_fd)
+    update_started = False
+    try:
+        try:
+            from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
+
+            with zipfile.ZipFile(zip_path, "r") as outer_zip:
+                if "payload.zip" not in outer_zip.namelist() or "signature.sig" not in outer_zip.namelist():
+                    raise UpdatePackageError(
+                        "Invalid update package format. Must contain payload.zip and signature.sig."
+                    )
+                with outer_zip.open("signature.sig") as signature_file:
+                    signature = signature_file.read()
+
+                hasher = hashes.Hash(hashes.SHA256())
+                with outer_zip.open("payload.zip") as payload_file, open(payload_path, "wb") as staged_payload:
+                    while True:
+                        chunk = payload_file.read(65536)
+                        if not chunk:
+                            break
+                        hasher.update(chunk)
+                        staged_payload.write(chunk)
+
+                public_key.verify(
+                    signature,
+                    hasher.finalize(),
+                    padding.PKCS1v15(),
+                    asym_utils.Prehashed(hashes.SHA256()),
+                )
+            if expected_commit:
+                try:
+                    with zipfile.ZipFile(payload_path, "r") as payload_zip:
+                        with payload_zip.open("grc-frontend/public/version.json") as version_file:
+                            version_data = json.load(version_file)
+                except (KeyError, OSError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+                    raise UpdatePackageError(
+                        "The signed package does not contain valid main-branch version metadata.",
+                        status.HTTP_403_FORBIDDEN,
+                    ) from exc
+                if not isinstance(version_data, dict) or version_data.get("commit") != expected_commit:
+                    raise UpdatePackageError(
+                        "The signed package does not match the checked main-branch commit.",
+                        status.HTTP_403_FORBIDDEN,
+                    )
+        except InvalidSignature as exc:
+            raise UpdatePackageError(
+                "Signature verification failed! The update is not trusted.",
+                status.HTTP_403_FORBIDDEN,
+            ) from exc
+        except zipfile.BadZipFile as exc:
+            raise UpdatePackageError("Uploaded file is not a valid ZIP archive.") from exc
+        except UpdatePackageError:
+            raise
+        except Exception as exc:
+            raise UpdatePackageError(f"Error parsing update package: {str(exc)}") from exc
+
+        appliance_root = str(settings.BASE_DIR.parent)
+        try:
+            threading.Thread(
+                target=execute_system_update, args=(payload_path, appliance_root)
+            ).start()
+        except (OSError, RuntimeError) as exc:
+            raise UpdatePackageError(
+                "Could not start the verified system update.",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ) from exc
+        update_started = True
+    finally:
+        if not update_started and os.path.exists(payload_path):
+            os.remove(payload_path)
+
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
     """Retrieves or updates audit testing plans, expectations, and attachments for a control."""
@@ -903,82 +1128,126 @@ class SystemUpdateView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
-        if getattr(request.user.profile, 'role', '') != 'Admin':
+        if get_user_role(request) != 'Admin':
             return Response({"error": "Only Administrators can perform system updates."}, status=status.HTTP_403_FORBIDDEN)
         
         file_obj = request.FILES.get('file')
         if not file_obj or not file_obj.name.endswith('.zip'):
             return Response({"error": "Please provide a valid .zip update package."}, status=status.HTTP_400_BAD_REQUEST)
 
+        update_dir = os.path.join(settings.BASE_DIR, 'updates')
+        os.makedirs(update_dir, exist_ok=True)
+        file_descriptor, zip_path = tempfile.mkstemp(prefix="uploaded-update-", suffix=".zip", dir=update_dir)
         try:
-            update_dir = os.path.join(settings.BASE_DIR, 'updates')
-            os.makedirs(update_dir, exist_ok=True)
-            zip_path = os.path.join(update_dir, 'latest_update.zip')
-            
-            with open(zip_path, 'wb+') as dest:
+            with os.fdopen(file_descriptor, 'wb') as dest:
                 for chunk in file_obj.chunks():
                     dest.write(chunk)
-            
-            # --- Cryptographic Signature Verification ---
-            pub_key_path = os.path.join(settings.BASE_DIR, 'configs', 'update_pub.pem')
-            if not os.path.exists(pub_key_path):
-                # If key doesn't exist yet, we fail closed to prevent unsigned updates
-                return Response({"error": "Update public key not found. System cannot verify updates."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            _verify_and_start_update(zip_path)
+        except UpdatePackageError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+        except OSError as exc:
+            return Response({"error": f"Failed to stage update: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
 
-            with open(pub_key_path, 'rb') as f:
-                public_key = load_pem_public_key(f.read())
-            
-            payload_path = os.path.join(update_dir, 'payload.zip')
-            try:
-                from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
-                with zipfile.ZipFile(zip_path, 'r') as outer_zip:
-                    if 'payload.zip' not in outer_zip.namelist() or 'signature.sig' not in outer_zip.namelist():
-                        return Response({"error": "Invalid update package format. Must contain payload.zip and signature.sig."}, status=status.HTTP_400_BAD_REQUEST)
-                    
-                    with outer_zip.open('signature.sig') as sig_f:
-                        signature = sig_f.read()
-                        
-                    # Stream payload.zip in 64KB chunks to disk while computing SHA-256 digest
-                    # to avoid loading up to 500MB into memory at once.
-                    hasher = hashes.Hash(hashes.SHA256())
-                    with outer_zip.open('payload.zip') as payload_f, open(payload_path, 'wb') as out_f:
-                        while True:
-                            chunk = payload_f.read(65536)
-                            if not chunk:
-                                break
-                            hasher.update(chunk)
-                            out_f.write(chunk)
-                    digest = hasher.finalize()
-                        
-                    # Verify RSA signature against the prehashed SHA-256 digest
-                    public_key.verify(
-                        signature,
-                        digest,
-                        padding.PKCS1v15(),
-                        asym_utils.Prehashed(hashes.SHA256())
-                    )
-                        
-            except InvalidSignature:
-                if os.path.exists(payload_path):
-                    os.remove(payload_path)
-                return Response({"error": "Signature verification failed! The update is not trusted."}, status=status.HTTP_403_FORBIDDEN)
-            except zipfile.BadZipFile:
-                if os.path.exists(payload_path):
-                    os.remove(payload_path)
-                return Response({"error": "Uploaded file is not a valid ZIP archive."}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                if os.path.exists(payload_path):
-                    os.remove(payload_path)
-                return Response({"error": f"Error parsing update package: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Execute with the VERIFIED payload path against the appliance root directory
-            appliance_root = str(settings.BASE_DIR.parent)
-            threading.Thread(target=execute_system_update, args=(payload_path, appliance_root)).start()
-            
-            return Response({"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."}, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            return Response({"error": f"Failed to stage update: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(
+            {"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class MainBranchUpdateView(APIView):
+    """Checks for and installs the signed update package for the latest GitHub main commit."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if get_user_role(request) != 'Admin':
+            return Response({"error": "Only Administrators can check for system updates."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            commit = _get_main_commit()
+            installed_commit = _get_installed_commit()
+            if installed_commit == commit:
+                return Response({
+                    "available": False,
+                    "up_to_date": True,
+                    "commit": commit,
+                    "installed_commit": installed_commit,
+                    "message": "The appliance is already running the latest main-branch commit.",
+                })
+
+            asset_url = _get_main_update_asset(commit)
+            if not asset_url:
+                return Response({
+                    "available": False,
+                    "up_to_date": False,
+                    "commit": commit,
+                    "installed_commit": installed_commit,
+                    "message": "A signed update package has not been published for the latest main commit yet.",
+                })
+
+            return Response({
+                "available": True,
+                "up_to_date": False,
+                "commit": commit,
+                "installed_commit": installed_commit,
+                "message": "A signed update package is available for the latest main commit.",
+            })
+        except GitHubUpdateError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+
+    def post(self, request):
+        if get_user_role(request) != 'Admin':
+            return Response({"error": "Only Administrators can install system updates."}, status=status.HTTP_403_FORBIDDEN)
+        if request.data.get("confirm_backup") is not True:
+            return Response(
+                {"error": "Confirm that you have created a current system backup before installing an update."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        expected_commit = request.data.get("expected_commit")
+        if not isinstance(expected_commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", expected_commit):
+            return Response({"error": "Check for updates again before installing."}, status=status.HTTP_400_BAD_REQUEST)
+
+        zip_path = None
+        try:
+            commit = _get_main_commit()
+            if commit != expected_commit.lower():
+                return Response(
+                    {"error": "The main branch changed since the update check. Check for updates again before installing."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if _get_installed_commit() == commit:
+                return Response({"error": "The appliance is already up to date."}, status=status.HTTP_409_CONFLICT)
+            asset_url = _get_main_update_asset(commit)
+            if not asset_url:
+                return Response(
+                    {"error": "A signed update package has not been published for the latest main commit yet."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            update_dir = os.path.join(settings.BASE_DIR, 'updates')
+            os.makedirs(update_dir, exist_ok=True)
+            zip_path = _download_main_update(asset_url, update_dir)
+            if _get_main_commit() != commit:
+                return Response(
+                    {"error": "The main branch advanced while the package was downloading. Check for updates again."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            _verify_and_start_update(zip_path, expected_commit=commit)
+        except GitHubUpdateError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+        except UpdatePackageError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+        finally:
+            if zip_path and os.path.exists(zip_path):
+                os.remove(zip_path)
+
+        return Response(
+            {"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class FactoryResetView(APIView):

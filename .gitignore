@@ -59,7 +59,6 @@ grc-backend/backups/
 *.log
 
 # Packaging tools & artifacts
-build-update.sh
 payload.zip
 update-*.zip
 *.zip
@@ -81,4 +80,4 @@ Thumbs.db
 !.github/workflows/
 .github/workflows/*
 !.github/workflows/ci.yml
-
+!.github/workflows/main-update.yml
