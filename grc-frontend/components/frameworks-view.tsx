@@ -85,7 +85,7 @@ export function FrameworksView({ targetControlId, onClearTarget, targetFilter, o
               </Button>
             </div>
             <FrameworkUploader 
-              onImported={(count, fileName) => {
+              onImported={() => {
                 setRefreshKey(prev => prev + 1);
                 setTimeout(() => setImportOpen(false), 2000);
               }} 

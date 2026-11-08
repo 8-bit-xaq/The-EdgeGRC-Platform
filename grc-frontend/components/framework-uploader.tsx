@@ -12,7 +12,7 @@ import type React from "react"
 import { useCallback, useEffect, useRef, useState } from "react"
 import { CheckCircle2, ChevronDown, FileJson, FileWarning, RotateCcw, UploadCloud, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
 import { fetchApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -96,7 +96,7 @@ function normalizeControl(item: any, index: number, frameworkName: string) {
 }
 
 interface FrameworkUploaderProps {
-  onImported?: (controlCount: number, fileName: string) => void
+  onImported?: (controlCount: number, frameworkName: string) => void
 }
 
 interface FrameworkLibraryEntry {
@@ -124,6 +124,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
   const [isDragging, setIsDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [controlCount, setControlCount] = useState(0)
+  const [importedFrameworkName, setImportedFrameworkName] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
   const [libraryFrameworks, setLibraryFrameworks] = useState<FrameworkLibraryEntry[]>([])
   const [selectedLibraryId, setSelectedLibraryId] = useState("")
@@ -168,6 +169,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
     setProgress(0)
     setFile(null)
     setControlCount(0)
+    setImportedFrameworkName("")
     setErrorMessage("")
     if (inputRef.current) inputRef.current.value = ""
   }, [])
@@ -242,8 +244,9 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
 
       setProgress(100);
       setControlCount(total);
+      setImportedFrameworkName(frameworkName);
       setStatus("success");
-      onImported?.(total, file.name);
+      onImported?.(total, frameworkName);
 
     } catch (error: any) {
       console.error(error);
@@ -284,7 +287,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
           <p className="text-sm text-muted-foreground">
             <span className="font-semibold text-success">{controlCount}</span>{" "}
             {controlCount === 1 ? "control" : "controls"} parsed from{" "}
-            <span className="font-medium text-card-foreground">{file?.name}</span>
+            <span className="font-medium text-card-foreground">{importedFrameworkName}</span>
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={reset} className="mt-1">
@@ -334,7 +337,9 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
                 disabled={isLoadingFramework || isBusy}
               >
                 <SelectTrigger aria-label="Bundled framework" className="h-10 min-w-0 flex-1 bg-background">
-                  <SelectValue placeholder="Select a framework" />
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {libraryFrameworks.find((framework) => framework.id === selectedLibraryId)?.name ?? "Select a framework"}
+                  </span>
                 </SelectTrigger>
                 <SelectContent className="w-[var(--anchor-width)] max-w-[calc(100vw-2rem)]">
                   {libraryFrameworks.map((framework) => (
