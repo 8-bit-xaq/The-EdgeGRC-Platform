@@ -341,7 +341,7 @@ class SignedUpdateVerificationTests(SimpleTestCase):
         with zipfile.ZipFile(payload, "w") as archive:
             archive.writestr(
                 "grc-frontend/public/version.json",
-                f'{{"version":"1.0.4","commit":"{commit}"}}',
+                f'{{"version":"1.0.0","commit":"{commit}"}}',
             )
         return payload.getvalue()
 
