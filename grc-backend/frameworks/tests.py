@@ -19,6 +19,7 @@ from .models import AssessmentActivity, Control, RemediationTask, validate_secur
 from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
 from .views import (
+    AssessmentActivityDetailView,
     DeviceLogView,
     FrameworkLibraryFileView,
     FrameworkLibraryView,
@@ -672,3 +673,42 @@ class RolePermissionAlignmentTests(SimpleTestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         with self.assertRaises(serializers.ValidationError):
             serializer.save()
+
+
+class AssessmentAssessorImmutabilityTests(TestCase):
+    def test_reviewer_cannot_reassign_their_assessment_before_approval(self):
+        reviewer = User.objects.create_user(username="assessment-reviewer")
+        reviewer.profile.role = "Reviewer"
+        reviewer.profile.save()
+        other_assessor = User.objects.create_user(username="other-assessor")
+        control = Control.objects.create(control_id="ASSESSOR-IMMUTABLE-1", description="Test control")
+        assessment = AssessmentActivity.objects.create(
+            control=control,
+            assessor=reviewer,
+            status="In QA Review",
+        )
+        factory = APIRequestFactory()
+
+        reassign_request = factory.patch(
+            f"/api/assessments/{assessment.pk}/",
+            {"assessor": other_assessor.pk},
+            format="json",
+        )
+        force_authenticate(reassign_request, user=reviewer)
+        reassign_response = AssessmentActivityDetailView.as_view()(reassign_request, pk=assessment.pk)
+
+        self.assertEqual(reassign_response.status_code, 200)
+        assessment.refresh_from_db()
+        self.assertEqual(assessment.assessor_id, reviewer.pk)
+
+        approve_request = factory.patch(
+            f"/api/assessments/{assessment.pk}/",
+            {"status": "Completed"},
+            format="json",
+        )
+        force_authenticate(approve_request, user=reviewer)
+        approve_response = AssessmentActivityDetailView.as_view()(approve_request, pk=assessment.pk)
+
+        self.assertEqual(approve_response.status_code, 403)
+        assessment.refresh_from_db()
+        self.assertEqual(assessment.status, "In QA Review")

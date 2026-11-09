@@ -121,6 +121,7 @@ class AssessmentActivitySerializer(serializers.ModelSerializer):
             'design_effectiveness', 'operating_effectiveness', 
             'auditor_notes', 'date_started', 'date_completed'
         ]
+        read_only_fields = ('assessor',)
 
 class ControlSerializer(serializers.ModelSerializer):
     proofs = serializers.SerializerMethodField()
