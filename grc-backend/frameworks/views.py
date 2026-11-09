@@ -644,6 +644,20 @@ class FrameworkRemovalView(APIView):
                     status=status.HTTP_409_CONFLICT,
                 )
 
+            if has_work:
+                username = request.data.get("username")
+                password = request.data.get("password")
+                if not isinstance(username, str) or not username.strip() or not isinstance(password, str) or not password:
+                    return Response(
+                        {"error": "Your administrator username and password are required to remove a framework with recorded work."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if username != request.user.get_username() or not request.user.check_password(password):
+                    return Response(
+                        {"error": "The administrator credentials could not be verified."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
             Control.objects.filter(pk__in=control_ids).delete()
             transaction.on_commit(
                 lambda: self._delete_files(file_refs, cleanup_failures, framework)

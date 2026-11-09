@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState, Fragment } from "react"
 import { Search, Pencil, ListFilter, Eye, ChevronDown, AlertTriangle, ListTodo, X, ClipboardCheck, CalendarClock, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -142,6 +143,8 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
   const [frameworkToRemove, setFrameworkToRemove] = useState<string | null>(null)
   const [removalCheck, setRemovalCheck] = useState<FrameworkRemovalCheck | null>(null)
   const [isRemovingFramework, setIsRemovingFramework] = useState(false)
+  const [removalUsername, setRemovalUsername] = useState("")
+  const [removalPassword, setRemovalPassword] = useState("")
 
   useEffect(() => {
     setRole(localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role"));
@@ -227,9 +230,14 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
     if (isRemovingFramework) return
     setFrameworkToRemove(null)
     setRemovalCheck(null)
+    setRemovalUsername("")
+    setRemovalPassword("")
   }
 
-  async function handleRemoveFramework(confirmationToken?: string) {
+  async function handleRemoveFramework(
+    confirmationToken?: string,
+    credentials?: { username: string; password: string },
+  ) {
     if (!frameworkToRemove) return
 
     setIsRemovingFramework(true)
@@ -239,6 +247,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         body: JSON.stringify({
           framework: frameworkToRemove,
           ...(confirmationToken ? { confirmation_token: confirmationToken } : {}),
+          ...(credentials ? credentials : {}),
         }),
       })
       const data = await response.json()
@@ -256,6 +265,8 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
 
       setFrameworkToRemove(null)
       setRemovalCheck(null)
+      setRemovalUsername("")
+      setRemovalPassword("")
       setFrameworkFilter("All")
       await queryClient.invalidateQueries({ queryKey: ["controls"] })
       toast.success(`${frameworkToRemove} removed`, {
@@ -270,6 +281,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
       )
     } finally {
       setIsRemovingFramework(false)
+      setRemovalPassword("")
     }
   }
 
@@ -515,6 +527,12 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                       onClick={() => {
                         setFrameworkToRemove(framework)
                         setRemovalCheck(null)
+                        setRemovalUsername(
+                          localStorage.getItem("grc_username")
+                            || sessionStorage.getItem("grc_username")
+                            || "",
+                        )
+                        setRemovalPassword("")
                       }}
                     >
                       <Trash2 className="size-4" aria-hidden />
@@ -792,6 +810,32 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                   <p className="text-xs text-muted-foreground">
                     Linked risk records will remain, but their links to these controls will be removed.
                   </p>
+                  <div className="space-y-3 rounded-md border border-border p-3">
+                    <p className="text-sm font-medium text-foreground">
+                      Verify administrator credentials to continue.
+                    </p>
+                    <div className="space-y-2">
+                      <Label htmlFor="framework-removal-username">Administrator username</Label>
+                      <Input
+                        id="framework-removal-username"
+                        autoComplete="username"
+                        value={removalUsername}
+                        onChange={(event) => setRemovalUsername(event.target.value)}
+                        disabled={isRemovingFramework}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="framework-removal-password">Administrator password</Label>
+                      <Input
+                        id="framework-removal-password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={removalPassword}
+                        onChange={(event) => setRemovalPassword(event.target.value)}
+                        disabled={isRemovingFramework}
+                      />
+                    </div>
+                  </div>
                 </>
               ) : removalCheck.error ? (
                 <p className="text-sm text-muted-foreground">
@@ -813,8 +857,16 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
             <Button
               type="button"
               variant="destructive"
-              disabled={isRemovingFramework}
-              onClick={() => handleRemoveFramework(removalCheck?.confirmation_token)}
+              disabled={
+                isRemovingFramework
+                || Boolean(removalCheck?.has_work && (!removalUsername.trim() || !removalPassword))
+              }
+              onClick={() => handleRemoveFramework(
+                removalCheck?.confirmation_token,
+                removalCheck?.has_work
+                  ? { username: removalUsername.trim(), password: removalPassword }
+                  : undefined,
+              )}
             >
               {isRemovingFramework
                 ? "Removing..."

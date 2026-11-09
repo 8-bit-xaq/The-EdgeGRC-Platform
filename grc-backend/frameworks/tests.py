@@ -718,6 +718,8 @@ class AssessmentAssessorImmutabilityTests(TestCase):
 class FrameworkRemovalTests(TestCase):
     def setUp(self):
         self.admin = User.objects.create_user(username="framework-removal-admin")
+        self.admin.set_password("correct-admin-password")
+        self.admin.save(update_fields=["password"])
         self.admin.profile.role = "Admin"
         self.admin.profile.save()
         self.factory = APIRequestFactory()
@@ -782,6 +784,8 @@ class FrameworkRemovalTests(TestCase):
         remove_response = self.post_removal({
             "framework": "Worked Framework",
             "confirmation_token": check_response.data["confirmation_token"],
+            "username": self.admin.username,
+            "password": "correct-admin-password",
         })
 
         self.assertEqual(remove_response.status_code, 200)
@@ -791,6 +795,41 @@ class FrameworkRemovalTests(TestCase):
         self.assertFalse(RemediationTask.objects.filter(control_id=control.pk).exists())
         risk.refresh_from_db()
         self.assertFalse(risk.mitigating_controls.exists())
+
+    def test_worked_framework_requires_valid_admin_credentials(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-CREDENTIALS-1",
+            framework="Credential Protected Framework",
+            description="Evaluated control",
+            status="Failing",
+        )
+        check_response = self.post_removal({"framework": "Credential Protected Framework"})
+        confirmation_token = check_response.data["confirmation_token"]
+
+        missing_credentials = self.post_removal({
+            "framework": "Credential Protected Framework",
+            "confirmation_token": confirmation_token,
+        })
+        self.assertEqual(missing_credentials.status_code, 400)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+
+        incorrect_credentials = self.post_removal({
+            "framework": "Credential Protected Framework",
+            "confirmation_token": confirmation_token,
+            "username": self.admin.username,
+            "password": "incorrect-password",
+        })
+        self.assertEqual(incorrect_credentials.status_code, 403)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+
+        mismatched_username = self.post_removal({
+            "framework": "Credential Protected Framework",
+            "confirmation_token": confirmation_token,
+            "username": "another-admin",
+            "password": "correct-admin-password",
+        })
+        self.assertEqual(mismatched_username.status_code, 403)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
 
     def test_confirmation_is_invalidated_when_control_work_changes(self):
         control = Control.objects.create(

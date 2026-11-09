@@ -165,11 +165,13 @@ Before removal, the application checks its controls for evaluations, evidence
 or proof files, audit schedules or test plans, assessment activity (including
 planned assessments), remediation tasks, and links to risks. If it finds work,
 the confirmation dialog summarizes the affected controls and requires a
-separate **Remove anyway** confirmation. Removing the framework deletes its
-controls and their associated assessment, evidence, test-plan, and remediation
-records; linked risk records remain but lose their links to the removed
-controls. If no work is recorded, the administrator still confirms the
-removal.
+separate **Remove anyway** confirmation with the administrator's username and
+password. Credentials are verified by the backend and are required even when
+the current administrator session is active. Removing the framework deletes
+its controls and their associated assessment, evidence, test-plan, and
+remediation records; linked risk records remain but lose their links to the
+removed controls. If no work is recorded, the administrator still confirms
+the removal without a credential prompt.
 
 #### Controls table
 
