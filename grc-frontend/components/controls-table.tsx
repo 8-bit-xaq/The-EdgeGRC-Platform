@@ -10,7 +10,7 @@
  */
 
 import { useEffect, useMemo, useState, Fragment } from "react"
-import { Search, Pencil, ListFilter, Eye, ChevronDown, AlertTriangle, ListTodo, X, ClipboardCheck, CalendarClock } from "lucide-react"
+import { Search, Pencil, ListFilter, Eye, ChevronDown, AlertTriangle, ListTodo, X, ClipboardCheck, CalendarClock, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -31,6 +31,14 @@ import {
 } from "@/components/ui/select"
 import { EditEvidenceDialog } from "@/components/edit-evidence-dialog"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   CONTROL_STATUSES,
   EFFECTIVENESS_STATUSES,
   type ComplianceControl,
@@ -46,6 +54,40 @@ import { useControls } from "@/hooks/use-grc-data"
 import { useQueryClient } from "@tanstack/react-query"
 
 type StatusFilter = "All" | ControlStatus
+
+interface FrameworkRemovalCheck {
+  error?: string
+  framework: string
+  has_work: boolean
+  work_summary: Record<string, number>
+  affected_control_count: number
+  affected_controls: Array<{ control_id: string; work: string[] }>
+  controls_truncated: boolean
+  confirmation_token: string
+}
+
+function isFrameworkRemovalCheck(value: unknown): value is FrameworkRemovalCheck {
+  if (!value || typeof value !== "object") return false
+  const check = value as Record<string, unknown>
+  return (
+    typeof check.confirmation_token === "string"
+    && typeof check.framework === "string"
+    && typeof check.has_work === "boolean"
+    && typeof check.work_summary === "object"
+    && check.work_summary !== null
+    && typeof check.affected_control_count === "number"
+    && Array.isArray(check.affected_controls)
+    && typeof check.controls_truncated === "boolean"
+  )
+}
+
+const FRAMEWORK_WORK_LABELS: Record<string, string> = {
+  evaluation: "Evaluated controls",
+  evidence: "Controls with evidence or proof files",
+  audit: "Controls with audit schedules, test plans, or assessments",
+  remediation: "Controls with remediation tasks",
+  risk: "Controls linked to risks",
+}
 
 function getControlGroupKey(framework: string | null | undefined, requirementTitle: string | null | undefined) {
   return JSON.stringify([framework || null, requirementTitle || "General Requirements"])
@@ -97,6 +139,9 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
   const [editing, setEditing] = useState<ComplianceControl | null>(null)
   const [role, setRole] = useState<string | null>(null)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
+  const [frameworkToRemove, setFrameworkToRemove] = useState<string | null>(null)
+  const [removalCheck, setRemovalCheck] = useState<FrameworkRemovalCheck | null>(null)
+  const [isRemovingFramework, setIsRemovingFramework] = useState(false)
 
   useEffect(() => {
     setRole(localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role"));
@@ -176,6 +221,56 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
       ...prev,
       [groupKey]: !prev[groupKey],
     }))
+  }
+
+  function closeFrameworkRemoval() {
+    if (isRemovingFramework) return
+    setFrameworkToRemove(null)
+    setRemovalCheck(null)
+  }
+
+  async function handleRemoveFramework(confirmationToken?: string) {
+    if (!frameworkToRemove) return
+
+    setIsRemovingFramework(true)
+    try {
+      const response = await fetchApi("frameworks/remove/", {
+        method: "POST",
+        body: JSON.stringify({
+          framework: frameworkToRemove,
+          ...(confirmationToken ? { confirmation_token: confirmationToken } : {}),
+        }),
+      })
+      const data = await response.json()
+
+      if (response.status === 409 && isFrameworkRemovalCheck(data)) {
+        setRemovalCheck(data)
+        return
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data.error === "string" ? data.error : "Framework removal failed.",
+        )
+      }
+
+      setFrameworkToRemove(null)
+      setRemovalCheck(null)
+      setFrameworkFilter("All")
+      await queryClient.invalidateQueries({ queryKey: ["controls"] })
+      toast.success(`${frameworkToRemove} removed`, {
+        description: typeof data.warning === "string"
+          ? data.warning
+          : `${data.deleted_controls} controls were removed.`,
+      })
+    } catch (error) {
+      console.error("Failed to remove framework", error)
+      toast.error(
+        error instanceof Error ? error.message : "Framework removal failed.",
+      )
+    } finally {
+      setIsRemovingFramework(false)
+    }
   }
 
   async function handleSave(updated: ComplianceControl) {
@@ -358,7 +453,7 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         </div>
       </div>
 
-      {availableFrameworks.length > 1 && (
+      {availableFrameworks.length > 0 && (
         <div className="border-b border-border px-5 py-4">
           <div className="mb-3">
             <h3 className="text-sm font-semibold text-foreground">Imported frameworks</h3>
@@ -386,26 +481,46 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
               const isSelected = frameworkFilter === framework
               const count = frameworkControlCounts.get(framework) ?? 0
               return (
-                <button
+                <div
                   key={framework}
-                  type="button"
-                  aria-pressed={isSelected}
-                  aria-label={`Show ${framework}, ${count} controls`}
-                  onClick={() => setFrameworkFilter(framework)}
                   className={cn(
-                    "flex min-h-[76px] min-w-0 flex-col items-start justify-center rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    "flex min-h-[76px] min-w-0 items-center rounded-lg border transition-colors",
                     isSelected
                       ? "border-primary bg-primary/5 ring-1 ring-primary/20"
-                      : "border-border bg-background hover:border-primary/40 hover:bg-accent/50",
+                      : "border-border bg-background hover:border-primary/40",
                   )}
                 >
-                  <span className="w-full truncate text-sm font-medium text-foreground" title={framework}>
-                    {framework}
-                  </span>
-                  <span className="mt-1 text-xs text-muted-foreground">
-                    {count.toLocaleString()} {count === 1 ? "control" : "controls"}
-                  </span>
-                </button>
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    aria-label={`Show ${framework}, ${count} controls`}
+                    onClick={() => setFrameworkFilter(framework)}
+                    className="flex min-h-[74px] min-w-0 flex-1 flex-col items-start justify-center rounded-l-lg px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span className="w-full truncate text-sm font-medium text-foreground" title={framework}>
+                      {framework}
+                    </span>
+                    <span className="mt-1 text-xs text-muted-foreground">
+                      {count.toLocaleString()} {count === 1 ? "control" : "controls"}
+                    </span>
+                  </button>
+                  {role === "Admin" && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="mr-2 size-8 shrink-0 text-muted-foreground hover:text-destructive"
+                      aria-label={`Remove ${framework}`}
+                      title={`Remove ${framework}`}
+                      onClick={() => {
+                        setFrameworkToRemove(framework)
+                        setRemovalCheck(null)
+                      }}
+                    >
+                      <Trash2 className="size-4" aria-hidden />
+                    </Button>
+                  )}
+                </div>
               )
             })}
           </div>
@@ -621,6 +736,97 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         userRole={role}
         onRiskClick={onRiskClick}
       />
+
+      <Dialog
+        open={frameworkToRemove !== null}
+        onOpenChange={(open) => !open && closeFrameworkRemoval()}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="size-4" aria-hidden />
+              {removalCheck?.has_work ? "Work found in this framework" : "Remove framework?"}
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              {removalCheck?.has_work
+                ? `Removing ${frameworkToRemove} will permanently delete its controls and associated work. Review the affected controls before continuing.`
+                : `Remove ${frameworkToRemove} and all of its controls? This cannot be undone.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {removalCheck && (
+            <div className="space-y-3">
+              {removalCheck.error && (
+                <p className="text-sm text-muted-foreground">{removalCheck.error}</p>
+              )}
+              {removalCheck.has_work ? (
+                <>
+                  <ul className="space-y-1 text-sm text-foreground">
+                    {Object.entries(removalCheck.work_summary)
+                      .filter(([, count]) => count > 0)
+                      .map(([type, count]) => (
+                        <li key={type}>
+                          <span className="font-medium">{count}</span>{" "}
+                          {FRAMEWORK_WORK_LABELS[type] ?? type}
+                        </li>
+                      ))}
+                  </ul>
+                  <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/30 p-3">
+                    <p className="mb-2 text-xs font-medium text-foreground">
+                      Affected controls ({removalCheck.affected_control_count})
+                    </p>
+                    <ul className="space-y-1 text-xs text-muted-foreground">
+                      {removalCheck.affected_controls.map((control) => (
+                        <li key={control.control_id}>
+                          <span className="font-mono text-foreground">{control.control_id}</span>
+                          <span>: {control.work.map((type) => FRAMEWORK_WORK_LABELS[type] ?? type).join(", ")}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {removalCheck.controls_truncated && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Additional affected controls are not shown.
+                      </p>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Linked risk records will remain, but their links to these controls will be removed.
+                  </p>
+                </>
+              ) : removalCheck.error ? (
+                <p className="text-sm text-muted-foreground">
+                  No work is currently recorded on these controls. Review the changed state before confirming removal.
+                </p>
+              ) : null}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isRemovingFramework}
+              onClick={closeFrameworkRemoval}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={isRemovingFramework}
+              onClick={() => handleRemoveFramework(removalCheck?.confirmation_token)}
+            >
+              {isRemovingFramework
+                ? "Removing..."
+                : removalCheck?.has_work
+                  ? "Remove anyway"
+                  : removalCheck?.error
+                    ? "Confirm removal"
+                    : "Check and remove"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

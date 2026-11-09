@@ -10,6 +10,8 @@ Orchestrates all appliance HTTP endpoints including:
 """
 
 from django.middleware.csrf import get_token
+from django.core import signing
+from django.db import transaction
 from rest_framework import generics, views, status
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -38,6 +40,8 @@ from rest_framework.throttling import ScopedRateThrottle
 # ----------------------------------------------
 
 import datetime
+import hashlib
+import logging
 import re
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
@@ -87,6 +91,7 @@ GITHUB_API_ROOT = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
 UPDATE_PACKAGE_NAME = "update-EdgeGRC.zip"
 MAX_UPDATE_PACKAGE_SIZE = 500 * 1024 * 1024
 MAX_FRAMEWORK_FILE_SIZE = 10 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 class GitHubUpdateError(Exception):
@@ -424,6 +429,237 @@ class ControlDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ControlSerializer
     lookup_field = 'control_id'
     permission_classes = [IsAuthenticated, ControlMatrixPermissions]
+
+
+class FrameworkRemovalView(APIView):
+    """Checks framework control work and requires a signed confirmation before deleting it."""
+    permission_classes = [IsAuthenticated, IsAdminUserOrReadOnly]
+    confirmation_salt = "framework-removal-confirmation"
+    confirmation_max_age = 300
+    work_types = ("evaluation", "evidence", "audit", "remediation", "risk")
+
+    @staticmethod
+    def _work_snapshot(controls):
+        summary = {work_type: 0 for work_type in FrameworkRemovalView.work_types}
+        affected_controls = []
+        snapshot = []
+        file_refs = []
+
+        for control in controls:
+            proofs = list(control.proofs.all())
+            tasks = list(control.remediation_tasks.all())
+            assessments = list(control.assessments.all())
+            risks = list(control.mitigated_risks.all())
+            test_plan = getattr(control, "test_plan", None)
+            work = []
+
+            if (
+                control.status != "Not Evaluated"
+                or control.control_effectiveness != "Not Tested"
+                or control.implementation_effectiveness != "Not Tested"
+            ):
+                work.append("evaluation")
+            if (control.evidence or "").strip() or proofs:
+                work.append("evidence")
+            if (
+                test_plan
+                or assessments
+                or control.testing_frequency != "None"
+                or control.next_audit_date
+            ):
+                work.append("audit")
+            if tasks:
+                work.append("remediation")
+            if risks:
+                work.append("risk")
+
+            if work:
+                affected_controls.append({
+                    "control_id": control.control_id,
+                    "work": work,
+                })
+                for work_type in work:
+                    summary[work_type] += 1
+
+            if test_plan and test_plan.attachment:
+                file_refs.append((test_plan.attachment.storage, test_plan.attachment.name))
+            for proof in proofs:
+                if proof.file:
+                    file_refs.append((proof.file.storage, proof.file.name))
+
+            snapshot.append({
+                "pk": control.pk,
+                "control_id": control.control_id,
+                "status": control.status,
+                "control_effectiveness": control.control_effectiveness,
+                "implementation_effectiveness": control.implementation_effectiveness,
+                "evidence": control.evidence,
+                "testing_frequency": control.testing_frequency,
+                "next_audit_date": control.next_audit_date,
+                "proofs": [(proof.pk, proof.file.name) for proof in proofs],
+                "test_plan": (
+                    (
+                        test_plan.pk,
+                        test_plan.test_methodology,
+                        test_plan.test_steps,
+                        test_plan.expected_evidence,
+                        test_plan.attachment.name,
+                    )
+                    if test_plan
+                    else None
+                ),
+                "assessments": [
+                    (
+                        item.pk,
+                        item.status,
+                        item.design_effectiveness,
+                        item.operating_effectiveness,
+                        item.auditor_notes,
+                        item.date_started,
+                        item.date_completed,
+                    )
+                    for item in assessments
+                ],
+                "remediation_tasks": [
+                    (
+                        task.pk,
+                        task.title,
+                        task.description,
+                        task.status,
+                        task.assigned_to_id,
+                        task.requested_by_id,
+                        task.due_date,
+                        task.updated_at,
+                    )
+                    for task in tasks
+                ],
+                "risks": [(risk.pk, risk.risk_id) for risk in risks],
+            })
+
+        snapshot_json = json.dumps(snapshot, sort_keys=True, default=str, separators=(",", ":"))
+        fingerprint = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+        return summary, affected_controls, fingerprint, file_refs
+
+    @staticmethod
+    def _delete_files(file_refs, cleanup_failures, framework):
+        for storage, name in file_refs:
+            try:
+                storage.delete(name)
+            except OSError:
+                logger.exception(
+                    "Could not delete an uploaded file after removing framework %r.",
+                    framework,
+                )
+                cleanup_failures.append(name)
+
+    def post(self, request):
+        framework = request.data.get("framework")
+        if not isinstance(framework, str) or not framework.strip() or len(framework) > 100:
+            return Response(
+                {"error": "A framework name of 1 to 100 characters is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        framework = framework.strip()
+        confirmation_token = request.data.get("confirmation_token")
+        if confirmation_token is not None and not isinstance(confirmation_token, str):
+            return Response(
+                {"error": "The framework removal confirmation is invalid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cleanup_failures = []
+        with transaction.atomic():
+            control_ids = list(
+                Control.objects.select_for_update()
+                .filter(framework=framework)
+                .values_list("pk", flat=True)
+            )
+            if not control_ids:
+                return Response(
+                    {"error": "This framework has no controls to remove."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            controls = list(
+                Control.objects.filter(pk__in=control_ids)
+                .select_related("test_plan")
+                .prefetch_related("proofs", "remediation_tasks", "assessments", "mitigated_risks")
+                .order_by("control_id")
+            )
+            summary, affected_controls, fingerprint, file_refs = self._work_snapshot(controls)
+            has_work = any(summary.values())
+
+            token_payload = None
+            token_error = False
+            if confirmation_token:
+                try:
+                    token_payload = signing.loads(
+                        confirmation_token,
+                        salt=self.confirmation_salt,
+                        max_age=self.confirmation_max_age,
+                    )
+                except signing.BadSignature:
+                    token_error = True
+
+            if confirmation_token and (
+                token_error
+                or not isinstance(token_payload, dict)
+                or token_payload.get("framework") != framework
+                or token_payload.get("fingerprint") != fingerprint
+            ):
+                replacement_token = signing.dumps(
+                    {"framework": framework, "fingerprint": fingerprint},
+                    salt=self.confirmation_salt,
+                )
+                return Response(
+                    {
+                        "error": "Framework controls changed since they were reviewed. Check the current work before confirming removal.",
+                        "framework": framework,
+                        "has_work": has_work,
+                        "work_summary": summary,
+                        "affected_control_count": len(affected_controls),
+                        "affected_controls": affected_controls[:50],
+                        "controls_truncated": len(affected_controls) > 50,
+                        "confirmation_token": replacement_token,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            if has_work and not confirmation_token:
+                confirmation_token = signing.dumps(
+                    {"framework": framework, "fingerprint": fingerprint},
+                    salt=self.confirmation_salt,
+                )
+                return Response(
+                    {
+                        "error": "Work exists on controls in this framework.",
+                        "framework": framework,
+                        "has_work": True,
+                        "work_summary": summary,
+                        "affected_control_count": len(affected_controls),
+                        "affected_controls": affected_controls[:50],
+                        "controls_truncated": len(affected_controls) > 50,
+                        "confirmation_token": confirmation_token,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            Control.objects.filter(pk__in=control_ids).delete()
+            transaction.on_commit(
+                lambda: self._delete_files(file_refs, cleanup_failures, framework)
+            )
+
+        response_data = {
+            "message": f"Framework {framework} and its controls were removed.",
+            "deleted_controls": len(control_ids),
+        }
+        if cleanup_failures:
+            response_data["warning"] = (
+                "The framework was removed, but some attached files could not be deleted. "
+                "Check the backend logs for details."
+            )
+            response_data["failed_file_cleanup_count"] = len(cleanup_failures)
+        return Response(response_data)
 
 
 class ProofUploadView(views.APIView):

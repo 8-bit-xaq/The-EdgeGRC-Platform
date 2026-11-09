@@ -4,6 +4,7 @@ from .views import (
     JobDownloadView,
     ControlListCreateView, 
     ControlDetailView, 
+    FrameworkRemovalView,
     ProofUploadView, 
     ProofDeleteView, 
     AuditLogListView, 
@@ -39,6 +40,7 @@ from .views import (
 )
 
 urlpatterns = [
+    path('frameworks/remove/', FrameworkRemovalView.as_view(), name='framework-remove'),
     path('controls/', ControlListCreateView.as_view()),
     path('controls/bulk-import/', BulkControlImportView.as_view(), name='bulk-control-import'),
     path('framework-library/', FrameworkLibraryView.as_view(), name='framework-library'),

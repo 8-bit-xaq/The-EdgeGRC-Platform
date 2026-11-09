@@ -160,6 +160,17 @@ After a framework is loaded, the importer collapses into a **Framework
 loaded** panel. An administrator can reopen it to add another framework. An
 import requires recognizable controls in the JSON.
 
+Administrators can remove a framework from its card in the controls matrix.
+Before removal, the application checks its controls for evaluations, evidence
+or proof files, audit schedules or test plans, assessment activity (including
+planned assessments), remediation tasks, and links to risks. If it finds work,
+the confirmation dialog summarizes the affected controls and requires a
+separate **Remove anyway** confirmation. Removing the framework deletes its
+controls and their associated assessment, evidence, test-plan, and remediation
+records; linked risk records remain but lose their links to the removed
+controls. If no work is recorded, the administrator still confirms the
+removal.
+
 #### Controls table
 
 When multiple frameworks are loaded, framework overview cards show each

@@ -15,7 +15,7 @@ import tempfile
 import zipfile
 from types import SimpleNamespace
 
-from .models import AssessmentActivity, Control, RemediationTask, validate_secure_upload
+from .models import AssessmentActivity, Control, RemediationTask, Risk, TestPlan, validate_secure_upload
 from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
 from .views import (
@@ -23,6 +23,7 @@ from .views import (
     DeviceLogView,
     FrameworkLibraryFileView,
     FrameworkLibraryView,
+    FrameworkRemovalView,
     MainBranchUpdateView,
     UpdatePackageError,
     _verify_and_start_update,
@@ -712,3 +713,120 @@ class AssessmentAssessorImmutabilityTests(TestCase):
         self.assertEqual(approve_response.status_code, 403)
         assessment.refresh_from_db()
         self.assertEqual(assessment.status, "In QA Review")
+
+
+class FrameworkRemovalTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username="framework-removal-admin")
+        self.admin.profile.role = "Admin"
+        self.admin.profile.save()
+        self.factory = APIRequestFactory()
+
+    def post_removal(self, data):
+        request = self.factory.post("/api/frameworks/remove/", data, format="json")
+        force_authenticate(request, user=self.admin)
+        return FrameworkRemovalView.as_view()(request)
+
+    def test_removes_framework_with_no_work_and_leaves_other_frameworks(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-EMPTY-1",
+            framework="Empty Framework",
+            description="Unworked control",
+        )
+        other_control = Control.objects.create(
+            control_id="FRAMEWORK-OTHER-1",
+            framework="Other Framework",
+            description="Keep this control",
+        )
+
+        response = self.post_removal({"framework": "Empty Framework"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["deleted_controls"], 1)
+        self.assertFalse(Control.objects.filter(pk=control.pk).exists())
+        self.assertTrue(Control.objects.filter(pk=other_control.pk).exists())
+
+    def test_work_requires_fresh_explicit_confirmation_before_removal(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-WORK-1",
+            framework="Worked Framework",
+            description="Worked control",
+            status="Failing",
+            evidence="Evidence narrative",
+        )
+        assessment = AssessmentActivity.objects.create(
+            control=control,
+            assessor=self.admin,
+            status="Planned",
+        )
+        TestPlan.objects.create(control=control, test_steps="Review access logs.")
+        RemediationTask.objects.create(
+            control=control,
+            title="Close the finding",
+            description="Update access controls.",
+            status="Resolved",
+        )
+        risk = Risk.objects.create(risk_id="FRAMEWORK-RISK-1", title="Access risk")
+        risk.mitigating_controls.add(control)
+
+        check_response = self.post_removal({"framework": "Worked Framework"})
+
+        self.assertEqual(check_response.status_code, 409)
+        self.assertEqual(check_response.data["affected_control_count"], 1)
+        self.assertEqual(
+            check_response.data["work_summary"],
+            {"evaluation": 1, "evidence": 1, "audit": 1, "remediation": 1, "risk": 1},
+        )
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+
+        remove_response = self.post_removal({
+            "framework": "Worked Framework",
+            "confirmation_token": check_response.data["confirmation_token"],
+        })
+
+        self.assertEqual(remove_response.status_code, 200)
+        self.assertFalse(Control.objects.filter(pk=control.pk).exists())
+        self.assertFalse(AssessmentActivity.objects.filter(pk=assessment.pk).exists())
+        self.assertFalse(TestPlan.objects.filter(control_id=control.pk).exists())
+        self.assertFalse(RemediationTask.objects.filter(control_id=control.pk).exists())
+        risk.refresh_from_db()
+        self.assertFalse(risk.mitigating_controls.exists())
+
+    def test_confirmation_is_invalidated_when_control_work_changes(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-CHANGED-1",
+            framework="Changed Framework",
+            description="Control with evidence",
+            evidence="Original evidence",
+        )
+        check_response = self.post_removal({"framework": "Changed Framework"})
+        control.evidence = "Updated evidence"
+        control.save(update_fields=["evidence"])
+
+        stale_confirmation = self.post_removal({
+            "framework": "Changed Framework",
+            "confirmation_token": check_response.data["confirmation_token"],
+        })
+
+        self.assertEqual(stale_confirmation.status_code, 409)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+        self.assertIn("confirmation_token", stale_confirmation.data)
+
+    def test_non_admin_cannot_remove_frameworks(self):
+        contributor = User.objects.create_user(username="framework-removal-contributor")
+        Control.objects.create(
+            control_id="FRAMEWORK-PROTECTED-1",
+            framework="Protected Framework",
+            description="Protected control",
+        )
+        request = self.factory.post(
+            "/api/frameworks/remove/",
+            {"framework": "Protected Framework"},
+            format="json",
+        )
+        force_authenticate(request, user=contributor)
+
+        response = FrameworkRemovalView.as_view()(request)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Control.objects.filter(framework="Protected Framework").exists())
