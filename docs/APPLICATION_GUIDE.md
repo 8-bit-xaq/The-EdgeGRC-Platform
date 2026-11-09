@@ -162,8 +162,13 @@ import requires recognizable controls in the JSON.
 
 #### Controls table
 
-Controls are grouped by requirement title (or **General Requirements** when
-there is no title). The table includes filtering/search tools for:
+When multiple frameworks are loaded, framework overview cards show each
+framework's control count and provide a quick filter; **All frameworks**
+returns to the combined matrix. Controls are grouped by framework and
+requirement title (or **General Requirements** when there is no title), so
+frameworks with similarly named requirements remain distinct. Framework
+names are highlighted in the group headings and control rows. The table
+includes filtering/search tools for:
 
 - Framework
 - Control status
