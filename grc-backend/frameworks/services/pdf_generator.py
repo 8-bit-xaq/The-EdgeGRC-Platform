@@ -21,7 +21,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER
 from reportlab.lib import colors
 from reportlab.lib.units import inch
-from reportlab.graphics.shapes import Drawing
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.graphics.shapes import Drawing, Rect, String
 from reportlab.graphics.charts.piecharts import Pie
 
 
@@ -30,18 +31,102 @@ def esc(value):
     return html.escape(str(value or ''), quote=True)
 
 
+def make_paragraph_table(data, col_widths, body_style, header_style):
+    """Wrap table text to its cell width and repeat the header on each page."""
+    formatted_data = []
+    for row_index, row in enumerate(data):
+        style = header_style if row_index == 0 else body_style
+        formatted_data.append([
+            cell if isinstance(cell, Paragraph) else Paragraph(
+                esc(cell).replace('\n', '<br/>'),
+                style,
+            )
+            for cell in row
+        ])
+    return Table(formatted_data, colWidths=col_widths, repeatRows=1)
+
+
+def make_pie_chart(metrics_list, drawing_width=150):
+    """Render a pie chart with a separate legend so small-slice labels stay readable."""
+    metrics = [(label, value, color) for label, value, color in metrics_list if value > 0]
+    drawing = Drawing(drawing_width, 100)
+
+    if metrics:
+        pie = Pie()
+        pie.x = max(0, (drawing_width - 170) / 2)
+        pie.y = 10
+        pie.width = 80
+        pie.height = 80
+        pie.labels = []
+        pie.slices.strokeWidth = 0.5
+        pie.data = [value for _, value, _ in metrics]
+
+        for index, (_, _, color) in enumerate(metrics):
+            pie.slices[index].fillColor = colors.HexColor(color)
+
+        drawing.add(pie)
+
+        legend_x = pie.x + pie.width + 6
+        first_label_y = (100 - 8) / 2 + (len(metrics) - 1) * 7
+        for index, (label, value, color) in enumerate(metrics):
+            label_y = first_label_y - index * 14
+            drawing.add(Rect(
+                legend_x,
+                label_y - 1,
+                6,
+                6,
+                fillColor=colors.HexColor(color),
+                strokeColor=None,
+            ))
+            drawing.add(String(
+                legend_x + 9,
+                label_y,
+                f"{label} ({value})",
+                fontName="Helvetica",
+                fontSize=7,
+            ))
+    else:
+        drawing.add(String(
+            drawing_width / 2,
+            46,
+            "No data",
+            textAnchor="middle",
+            fontName="Helvetica",
+            fontSize=8,
+        ))
+
+    return drawing
+
+
 def make_confidential_footer(company_name):
     def footer(canvas, doc):
         canvas.saveState()
         canvas.setFont('Helvetica-Bold', 9)
         canvas.setStrokeColorRGB(0.8, 0.8, 0.8)
         canvas.line(inch, 0.9 * inch, letter[0] - inch, 0.9 * inch)
-        
-        canvas.drawString(inch, 0.65 * inch, f"{company_name} | Generated: {timezone.now().strftime('%Y-%m-%d')}")
+
+        generated = f"Generated: {timezone.now().strftime('%Y-%m-%d')}"
+        available_width = letter[0] - (2 * inch)
+        original_company = str(company_name or '')
+        company = original_company
+        while company and stringWidth(
+            f"{company} | {generated}", 'Helvetica-Bold', 9
+        ) > available_width:
+            company = company[:-1]
+        if company != original_company:
+            company = company.rstrip()
+            while company and stringWidth(
+                f"{company}... | {generated}", 'Helvetica-Bold', 9
+            ) > available_width:
+                company = company[:-1]
+            company = f"{company.rstrip()}..."
+        footer_text = f"{company} | {generated}" if company else generated
+        canvas.drawString(inch, 0.63 * inch, footer_text)
+
         canvas.setFillColor(colors.HexColor('#ef4444')) 
-        canvas.drawCentredString(letter[0] / 2.0, 0.65 * inch, "CONFIDENTIAL - DO NOT DISTRIBUTE")
+        canvas.drawCentredString(letter[0] / 2.0, 0.39 * inch, "CONFIDENTIAL - DO NOT DISTRIBUTE")
         canvas.setFillColor(colors.black)
-        canvas.drawRightString(letter[0] - inch, 0.65 * inch, f"Page {doc.page}")
+        canvas.drawRightString(letter[0] - inch, 0.39 * inch, f"Page {doc.page}")
         canvas.restoreState()
     return footer
 
@@ -79,6 +164,20 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
     
     styles = getSampleStyleSheet()
     centered_style = ParagraphStyle(name="Centered", parent=styles['Normal'], alignment=TA_CENTER)
+    table_body_style = ParagraphStyle(
+        name="ReportTableBody",
+        parent=styles['Normal'],
+        fontName="Helvetica",
+        fontSize=8,
+        leading=10,
+        splitLongWords=1,
+    )
+    table_header_style = ParagraphStyle(
+        name="ReportTableHeader",
+        parent=table_body_style,
+        fontName="Helvetica-Bold",
+        textColor=colors.whitesmoke,
+    )
     elements = []
 
     if logo_data_url and 'base64,' in logo_data_url:
@@ -127,34 +226,6 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
         elements.append(Paragraph(f"• <b>Compliance Score:</b> {summary['compliance_score']}%", styles['Normal']))
         elements.append(Spacer(1, 12))
         
-        def make_pie(metrics_list):
-            d = Drawing(150, 120)
-            pie = Pie()
-            pie.x = 25
-            pie.y = 10
-            pie.width = 100
-            pie.height = 100
-            pie.sideLabels = 0 
-            pie.slices.strokeWidth = 0.5
-            
-            data, labels = [], []
-            for label, val, color in metrics_list:
-                if val > 0:
-                    data.append(val)
-                    labels.append(f"{label} ({val})")
-                    
-            pie.data = data
-            pie.labels = labels
-            
-            idx = 0
-            for label, val, color in metrics_list:
-                if val > 0:
-                    pie.slices[idx].fillColor = colors.HexColor(color)
-                    idx += 1
-            
-            d.add(pie)
-            return d
-
         if summary['total_controls'] > 0:
             status_metrics = [
                 ("Pass", summary['passing_controls'], '#22c55e'), 
@@ -168,7 +239,7 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
             
             chart_table_data = [
                 [Paragraph("<b>Overall Status</b>", centered_style), Paragraph("<b>Design Eval</b>", centered_style), Paragraph("<b>Operational Eval</b>", centered_style)],
-                [make_pie(status_metrics), make_pie(design_metrics), make_pie(op_metrics)]
+                [make_pie_chart(status_metrics), make_pie_chart(design_metrics), make_pie_chart(op_metrics)]
             ]
             
             chart_table = Table(chart_table_data, colWidths=[155, 155, 155])
@@ -199,7 +270,7 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
             
             risk_chart_table_data = [
                 [Paragraph("<b>Inherent Risk Profile</b>", centered_style), Paragraph("<b>Residual Risk Profile</b>", centered_style)],
-                [make_pie(inherent_metrics), make_pie(residual_metrics)]
+                [make_pie_chart(inherent_metrics, drawing_width=220), make_pie_chart(residual_metrics, drawing_width=220)]
             ]
             
             risk_chart_table = Table(risk_chart_table_data, colWidths=[230, 230])
@@ -211,7 +282,7 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
             elements.append(risk_chart_table)
         
         elements.append(Spacer(1, 24))
-        elements.append(Paragraph("<b>Executive Attestation & Sign-Off</b>", styles['Heading3']))
+        elements.append(Paragraph("<b>Executive Attestation &amp; Sign-Off</b>", styles['Heading3']))
         elements.append(Spacer(1, 6))
         
         attestation_text = (
@@ -228,7 +299,7 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
             ["Prepared By: ___________________________", "Date: _________________"],
             ["Reviewed By (CISO/Admin): ______________", "Date: _________________"],
         ]
-        sign_table = Table(sign_table_data, colWidths=[300, 200])
+        sign_table = Table(sign_table_data, colWidths=[300, 168])
         sign_table.setStyle(TableStyle([
             ('FONTNAME', (0,0), (-1,-1), 'Helvetica'),
             ('FONTSIZE', (0,0), (-1,-1), 10),
@@ -266,18 +337,25 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
                 ])
 
         if all_tasks:
-            elements.append(Paragraph("Plan of Action & Milestones (POA&M)", styles['Heading2']))
+            elements.append(Paragraph("Plan of Action &amp; Milestones (POA&amp;M)", styles['Heading2']))
             elements.append(Spacer(1, 6))
             poam_data = [["Target Control", "Action Item Objective", "Assigned To", "Status"]]
             for t in all_tasks:
                 poam_data.append([t['control_id'], t['title'], t['assigned'], t['status']])
-            poam_table = Table(poam_data, colWidths=[100, 220, 80, 80])
+            poam_table = make_paragraph_table(
+                poam_data,
+                col_widths=[92, 220, 82, 74],
+                body_style=table_body_style,
+                header_style=table_header_style,
+            )
             poam_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1f2937')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                 ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ('RIGHTPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
                 ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#fef2f2')), 
                 ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#e5e7eb')),
             ]))
@@ -288,13 +366,20 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
             elements.append(Paragraph("Pending Quality Assurance Reviews", styles['Heading2']))
             elements.append(Spacer(1, 6))
             qa_data = [["Target Control", "Assessed By", "Date Started"]] + pending_qa
-            qa_table = Table(qa_data, colWidths=[150, 200, 130])
+            qa_table = make_paragraph_table(
+                qa_data,
+                col_widths=[110, 200, 158],
+                body_style=table_body_style,
+                header_style=table_header_style,
+            )
             qa_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1f2937')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                 ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ('RIGHTPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
                 ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#fffbeb')), 
                 ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#e5e7eb')),
             ]))
@@ -305,13 +390,20 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
             elements.append(Paragraph("Identified Control Weaknesses", styles['Heading2']))
             elements.append(Spacer(1, 6))
             weak_data = [["Target Control", "Design Effectiveness", "Operational Effectiveness"]] + failing_controls
-            weak_table = Table(weak_data, colWidths=[150, 165, 165])
+            weak_table = make_paragraph_table(
+                weak_data,
+                col_widths=[110, 175, 183],
+                body_style=table_body_style,
+                header_style=table_header_style,
+            )
             weak_table.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1f2937')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                 ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ('RIGHTPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
                 ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#fef2f2')), 
                 ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#e5e7eb')),
             ]))
@@ -319,7 +411,7 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
             elements.append(PageBreak())
 
     if export_data.get('risks'):
-        elements.append(Paragraph("Enterprise Risk Register & Heatmap", styles['Heading2']))
+        elements.append(Paragraph("Enterprise Risk Register &amp; Heatmap", styles['Heading2']))
         elements.append(Spacer(1, 6))
         elements.append(Paragraph("<b>Inherent Risk Heatmap</b>", styles['Heading3']))
         elements.append(Spacer(1, 6))
@@ -366,13 +458,20 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
         for r in export_data['risks']:
             risk_data.append([r.get('risk_id', ''), r.get('title', ''), str(r.get('inherent_score', '')), str(r.get('residual_score', ''))])
         
-        risk_table = Table(risk_data, colWidths=[80, 260, 80, 80])
+        risk_table = make_paragraph_table(
+            risk_data,
+            col_widths=[72, 254, 71, 71],
+            body_style=table_body_style,
+            header_style=table_header_style,
+        )
         risk_table.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1f2937')),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
             ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+            ('VALIGN', (0,0), (-1,-1), 'TOP'),
+            ('LEFTPADDING', (0,0), (-1,-1), 6),
+            ('RIGHTPADDING', (0,0), (-1,-1), 6),
+            ('TOPPADDING', (0,0), (-1,-1), 5),
+            ('BOTTOMPADDING', (0,0), (-1,-1), 5),
             ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#f8fafc')),
             ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#e5e7eb')),
         ]))
@@ -427,16 +526,22 @@ def generate_audit_pdf(export_data, company_name, export_password=None, logo_dat
                 else: action_type = "Deleted"
                 log_table_data.append([ts, actor, action_type])
             
-            lt = Table(log_table_data, colWidths=[120, 100, 260])
+            lt = make_paragraph_table(
+                log_table_data,
+                col_widths=[120, 100, 248],
+                body_style=table_body_style,
+                header_style=table_header_style,
+            )
             lt.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#1f2937')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.whitesmoke),
                 ('ALIGN', (0,0), (-1,-1), 'LEFT'),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('LEFTPADDING', (0,0), (-1,-1), 6),
+                ('RIGHTPADDING', (0,0), (-1,-1), 6),
+                ('TOPPADDING', (0,0), (-1,-1), 5),
+                ('BOTTOMPADDING', (0,0), (-1,-1), 5),
                 ('BACKGROUND', (0,1), (-1,-1), colors.HexColor('#f8fafc')),
                 ('GRID', (0,0), (-1,-1), 1, colors.HexColor('#e5e7eb')),
-                ('VALIGN', (0,0), (-1,-1), 'TOP'),
             ]))
             elements.append(lt)
             elements.append(Spacer(1, 16))

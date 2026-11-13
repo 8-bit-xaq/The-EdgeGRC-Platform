@@ -6,6 +6,14 @@ from pathlib import Path
 from rest_framework import serializers
 from rest_framework.test import APIRequestFactory, force_authenticate
 from unittest.mock import Mock, patch
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.graphics.charts.piecharts import Pie
+from reportlab.graphics.shapes import String
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.platypus import Paragraph
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding, rsa, utils as asym_utils
 import io
@@ -38,6 +46,146 @@ from .permissions import (
     RiskPermissions,
     TestPlanPermissions,
 )
+from .services.pdf_generator import (
+    generate_audit_pdf,
+    make_confidential_footer,
+    make_paragraph_table,
+    make_pie_chart,
+)
+
+
+class PdfGeneratorLayoutTests(SimpleTestCase):
+    def setUp(self):
+        styles = getSampleStyleSheet()
+        self.body_style = ParagraphStyle(
+            name="PdfTestBody",
+            parent=styles["Normal"],
+            fontName="Helvetica",
+            fontSize=8,
+            leading=10,
+        )
+        self.header_style = ParagraphStyle(
+            name="PdfTestHeader",
+            parent=self.body_style,
+            fontName="Helvetica-Bold",
+            textColor=colors.whitesmoke,
+        )
+
+    def test_long_table_cells_wrap_inside_the_page_width(self):
+        table = make_paragraph_table(
+            [
+                ["Target Control", "Action Item Objective", "Assigned To", "Status"],
+                [
+                    "ID.RA-01",
+                    "EXAMPLE — Establish risk-based vulnerability remediation SLAs "
+                    "and document approved exceptions",
+                    "Unassigned",
+                    "In Progress",
+                ],
+            ],
+            [92, 220, 82, 74],
+            self.body_style,
+            self.header_style,
+        )
+
+        width, _ = table.wrap(468, 800)
+
+        self.assertEqual(width, letter[0] - 2 * inch)
+        cell = table._cellvalues[1][1]
+        if isinstance(cell, tuple):
+            cell = cell[0]
+        self.assertIsInstance(cell, Paragraph)
+        self.assertGreater(table._rowHeights[1], 20)
+        self.assertEqual(table.repeatRows, 1)
+
+    def test_footer_places_confidentiality_and_page_number_on_separate_row(self):
+        canvas = Mock()
+        footer = make_confidential_footer("Enterprise Compliance Organization " * 8)
+
+        footer(canvas, SimpleNamespace(page=2))
+
+        draw_string = canvas.drawString.call_args.args
+        draw_centered = canvas.drawCentredString.call_args.args
+        draw_right = canvas.drawRightString.call_args.args
+        self.assertIn("Generated:", draw_string[2])
+        self.assertIn("CONFIDENTIAL", draw_centered[2])
+        self.assertEqual(draw_centered[1], draw_right[1])
+        self.assertNotEqual(draw_string[1], draw_centered[1])
+        self.assertLessEqual(
+            stringWidth(draw_string[2], "Helvetica-Bold", 9),
+            letter[0] - 2 * inch,
+        )
+
+    def test_pie_chart_uses_separate_non_overlapping_legend(self):
+        chart = make_pie_chart([
+            ("Pass", 2, "#22c55e"),
+            ("Wait", 3, "#f59e0b"),
+            ("Fail", 1, "#ef4444"),
+            ("Un-eval", 410, "#64748b"),
+            ("N/A", 0, "#cbd5e1"),
+        ])
+
+        pie = next(item for item in chart.contents if isinstance(item, Pie))
+        legend = [item for item in chart.contents if isinstance(item, String)]
+
+        self.assertEqual(pie.labels, [])
+        self.assertEqual([item.text for item in legend], [
+            "Pass (2)",
+            "Wait (3)",
+            "Fail (1)",
+            "Un-eval (410)",
+        ])
+        self.assertEqual(len({item.y for item in legend}), len(legend))
+        self.assertTrue(all(
+            item.x + stringWidth(item.text, item.fontName, item.fontSize) <= chart.width
+            for item in legend
+        ))
+
+    def test_pdf_generation_handles_long_export_table_text(self):
+        long_title = (
+            "EXAMPLE — Establish risk-based vulnerability remediation SLAs and "
+            "document approved exceptions across all in-scope systems"
+        )
+        pdf = generate_audit_pdf(
+            {
+                "controls": [
+                    {
+                        "control_id": "ID.RA-01",
+                        "status": "Failing",
+                        "control_effectiveness": "Deficient",
+                        "implementation_effectiveness": "Not Tested",
+                        "remediation_tasks": [
+                            {
+                                "title": long_title,
+                                "assigned_to_username": "Unassigned",
+                                "status": "In Progress",
+                            }
+                        ],
+                        "assessments": [
+                            {
+                                "status": "In QA Review",
+                                "assessor_username": "reviewer@example.org",
+                                "date_started": "2026-11-13T10:00:00",
+                            }
+                        ],
+                    }
+                ],
+                "risks": [
+                    {
+                        "risk_id": "RSK-EX-001",
+                        "title": "EXAMPLE — " + ("Long risk scenario " * 15),
+                        "inherent_likelihood": 4,
+                        "inherent_impact": 5,
+                        "inherent_score": 20,
+                        "residual_score": 20,
+                    }
+                ],
+            },
+            "Edge GRC Development",
+        )
+
+        self.assertTrue(pdf.getvalue().startswith(b"%PDF-"))
+        self.assertGreater(len(pdf.getvalue()), 1000)
 
 
 class DatabaseBackupArchiveTests(SimpleTestCase):

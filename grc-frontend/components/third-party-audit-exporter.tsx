@@ -7,8 +7,8 @@
  * - Scopes: Controls matrix, uploaded evidence proof files, risk register, audit logs, and summary posture.
  * - Formats: Bundled ZIP package, raw structured JSON, or compiled PDF executive report.
  * - Security: Optional client-directed AES-256 ZIP encryption.
- * - Asynchronous Processing: Initiates backend export tasks (`/api/export-audit-package/`),
- *   polls job progress (`/api/jobs/<job_id>/`), and streams download packages (`/api/jobs/<job_id>/download/`).
+ * - ZIP packages are returned directly; PDF exports use a background task and are downloaded
+ *   after polling `/api/jobs/<job_id>/status/`.
  */
 
 import { useEffect, useState } from "react"
@@ -180,7 +180,30 @@ export function ThirdPartyAuditExporter() {
       }
 
       let blob: Blob | undefined
-      if (format === "zip" || format === "pdf") {
+      if (format === "zip") {
+        blob = await res.blob()
+        const signature = new Uint8Array(await blob.slice(0, 4).arrayBuffer())
+        const isZip =
+          signature[0] === 0x50 &&
+          signature[1] === 0x4b &&
+          (
+            (signature[2] === 0x03 && signature[3] === 0x04) ||
+            (signature[2] === 0x05 && signature[3] === 0x06) ||
+            (signature[2] === 0x07 && signature[3] === 0x08)
+          )
+        if (!isZip) {
+          const responseText = await blob.text()
+          let errorMessage = "The server returned an invalid ZIP package."
+          try {
+            const errorData = JSON.parse(responseText)
+            errorMessage = errorData.error || errorData.detail || errorMessage
+          } catch {
+            if (responseText) errorMessage = responseText
+          }
+          throw new Error(errorMessage)
+        }
+        setDownloadFilename(`audit-package-${Date.now()}.zip`)
+      } else if (format === "pdf") {
         const data = await res.json()
         if (data.task_id) {
           // Poll for task completion
@@ -196,8 +219,7 @@ export function ThirdPartyAuditExporter() {
                 const downloadRes = await fetchApi(`jobs/${data.task_id}/download/`)
                 if (downloadRes.ok) {
                   blob = await downloadRes.blob()
-                  const extension = format === "zip" ? "zip" : "pdf"
-                  setDownloadFilename(`audit-package-${Date.now()}.${extension}`)
+                  setDownloadFilename(`audit-package-${Date.now()}.pdf`)
                 } else {
                   throw new Error("Failed to download result file.")
                 }
