@@ -56,6 +56,7 @@ from cryptography.x509.oid import NameOID
 import io
 import os
 import ipaddress
+import stat
 import zipfile
 import json
 import base64
@@ -90,6 +91,7 @@ GITHUB_REPOSITORY = "8-bit-xaq/The-EdgeGRC-Platform"
 GITHUB_API_ROOT = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
 UPDATE_PACKAGE_NAME = "update-EdgeGRC.zip"
 MAX_UPDATE_PACKAGE_SIZE = 500 * 1024 * 1024
+MAX_UPDATE_EXPANDED_SIZE = 2 * 1024 * 1024 * 1024
 MAX_FRAMEWORK_FILE_SIZE = 10 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
@@ -269,10 +271,22 @@ def _verify_and_start_update(zip_path, expected_commit=None):
             from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
 
             with zipfile.ZipFile(zip_path, "r") as outer_zip:
-                if "payload.zip" not in outer_zip.namelist() or "signature.sig" not in outer_zip.namelist():
+                outer_members = outer_zip.infolist()
+                outer_names = [member.filename for member in outer_members]
+                if (
+                    len(outer_names) != len(set(outer_names))
+                    or set(outer_names) != {"payload.zip", "signature.sig"}
+                ):
                     raise UpdatePackageError(
-                        "Invalid update package format. Must contain payload.zip and signature.sig."
+                        "Invalid update package format. Must contain only payload.zip and signature.sig."
                     )
+                members_by_name = {member.filename: member for member in outer_members}
+                if (
+                    members_by_name["payload.zip"].file_size > MAX_UPDATE_PACKAGE_SIZE
+                    or members_by_name["signature.sig"].file_size > 8192
+                    or any(member.flag_bits & 0x1 for member in outer_members)
+                ):
+                    raise UpdatePackageError("Update package contains an oversized or encrypted entry.", 413)
                 with outer_zip.open("signature.sig") as signature_file:
                     signature = signature_file.read()
 
@@ -306,6 +320,34 @@ def _verify_and_start_update(zip_path, expected_commit=None):
                         "The signed package does not match the checked main-branch commit.",
                         status.HTTP_403_FORBIDDEN,
                     )
+            with zipfile.ZipFile(payload_path, "r") as payload_zip:
+                payload_members = payload_zip.infolist()
+                member_names = [member.filename for member in payload_members]
+                if len(member_names) != len(set(member_names)):
+                    raise UpdatePackageError("The update payload contains duplicate archive paths.")
+                expanded_size = 0
+                for member in payload_members:
+                    name = member.filename
+                    normalized_name = os.path.normpath(name)
+                    if (
+                        not name
+                        or "\\" in name
+                        or any(part in {".", ".."} for part in name.split("/"))
+                        or os.path.isabs(name)
+                        or normalized_name == ".."
+                        or normalized_name.startswith(".." + os.path.sep)
+                        or (len(name) > 1 and name[1] == ":")
+                    ):
+                        raise UpdatePackageError("The update payload contains an unsafe archive path.")
+                    if stat.S_ISLNK(member.external_attr >> 16):
+                        raise UpdatePackageError("The update payload must not contain symbolic links.")
+                    if not member.is_dir():
+                        expanded_size += member.file_size
+                        if expanded_size > MAX_UPDATE_EXPANDED_SIZE:
+                            raise UpdatePackageError(
+                                "The expanded update payload exceeds the 2 GB limit.",
+                                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            )
         except InvalidSignature as exc:
             raise UpdatePackageError(
                 "Signature verification failed! The update is not trusted.",
@@ -1415,8 +1457,15 @@ class SystemUpdateView(APIView):
         os.makedirs(update_dir, exist_ok=True)
         file_descriptor, zip_path = tempfile.mkstemp(prefix="uploaded-update-", suffix=".zip", dir=update_dir)
         try:
+            total_size = 0
             with os.fdopen(file_descriptor, 'wb') as dest:
                 for chunk in file_obj.chunks():
+                    total_size += len(chunk)
+                    if total_size > MAX_UPDATE_PACKAGE_SIZE:
+                        raise UpdatePackageError(
+                            "The update package exceeds the 500 MB size limit.",
+                            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        )
                     dest.write(chunk)
             _verify_and_start_update(zip_path)
         except UpdatePackageError as exc:

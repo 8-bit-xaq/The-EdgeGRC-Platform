@@ -1,11 +1,57 @@
 #!/bin/bash
-set -e
+set -Eeuo pipefail
 
-REPO_DIR=$(pwd)
+REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$REPO_DIR"
 
 echo "=========================================="
 echo "   🚀 Edge-GRC Update Packaging Tool"
 echo "=========================================="
+
+PRIVATE_KEY="grc-backend/configs/vendor_private.pem"
+PUBLIC_KEY="grc-backend/configs/update_pub.pem"
+if [ ! -f "$PRIVATE_KEY" ]; then
+    echo "❌ Signing key not found at ${PRIVATE_KEY}; refusing to create an unsigned update."
+    exit 1
+fi
+if [ ! -f "$PUBLIC_KEY" ]; then
+    echo "❌ Appliance update public key not found at ${PUBLIC_KEY}."
+    exit 1
+fi
+if [ ! -x "grc-frontend/node_modules/.bin/next" ]; then
+    echo "❌ Frontend dependencies are missing. Run 'npm ci' in grc-frontend first."
+    exit 1
+fi
+
+PYTHON_EXEC="python3"
+if [ -x "grc-backend/.venv/bin/python" ]; then
+    PYTHON_EXEC="grc-backend/.venv/bin/python"
+elif [ -x "grc-backend/venv/bin/python" ]; then
+    PYTHON_EXEC="grc-backend/venv/bin/python"
+fi
+if ! "$PYTHON_EXEC" -c 'import cryptography' >/dev/null 2>&1; then
+    echo "❌ Python package 'cryptography' is required to sign updates."
+    exit 1
+fi
+if ! "$PYTHON_EXEC" - "$PRIVATE_KEY" "$PUBLIC_KEY" <<'PY'
+import os
+import sys
+from cryptography.hazmat.primitives.serialization import load_pem_private_key, load_pem_public_key
+
+private_path, public_path = sys.argv[1:]
+if os.stat(private_path).st_mode & 0o077:
+    raise SystemExit("Signing key permissions are too open; restrict access to its owner.")
+with open(private_path, "rb") as private_file:
+    private_key = load_pem_private_key(private_file.read(), password=None)
+with open(public_path, "rb") as public_file:
+    public_key = load_pem_public_key(public_file.read())
+if private_key.public_key().public_numbers() != public_key.public_numbers():
+    raise SystemExit("Signing key does not match the appliance update public key.")
+PY
+then
+    echo "❌ Update signing key validation failed."
+    exit 1
+fi
 
 # 1. Locate the version.json file (check root or frontend directory)
 VERSION_FILE=""
@@ -60,6 +106,10 @@ esac
 
 # Clean leading 'v' if user typed it
 NEW_VERSION="${NEW_VERSION#v}"
+if ! [[ "$NEW_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+    echo "❌ Version must be a valid semantic version (for example 1.2.3 or 1.2.3-rc1)."
+    exit 1
+fi
 
 echo ""
 echo "📝 Setting platform version to v${NEW_VERSION}..."
@@ -84,16 +134,19 @@ elif [ -f "grc-frontend/package.json" ]; then
     sed -i.bak -E "s/\"version\": \"[^\"]+\"/\"version\": \"${NEW_VERSION}\"/" grc-frontend/package.json && rm -f grc-frontend/package.json.bak
 fi
 
-# 6. Build frontend standalone bundle if npm is available
-if command -v npm >/dev/null 2>&1 && [ -d "grc-frontend" ]; then
-    echo "🔨 Compiling Next.js production standalone distribution..."
-    (
-        cd grc-frontend
-        echo "NEXT_PUBLIC_API_URL=/api" > .env.production
-        npm run build
-    )
-elif [ -d "grc-frontend/.next/standalone" ]; then
-    echo "ℹ️  Found existing pre-compiled Next.js standalone distribution. Re-using build."
+# 6. Build frontend standalone bundle
+if ! command -v npm >/dev/null 2>&1; then
+    echo "❌ npm is required to build the frontend update."
+    exit 1
+fi
+echo "🔨 Compiling Next.js production standalone distribution..."
+(
+    cd grc-frontend
+    NEXT_PUBLIC_API_URL=/api npm run build
+)
+if [ ! -f "grc-frontend/.next/standalone/server.js" ]; then
+    echo "❌ Frontend build did not produce the required standalone server."
+    exit 1
 fi
 
 # 7. Create staging directory for clean packaging
@@ -130,25 +183,17 @@ find "$STAGE_DIR/grc-backend" -type d -name "__pycache__" -exec rm -rf {} + 2>/d
 
 # Stage Frontend
 mkdir -p "$STAGE_DIR/grc-frontend"
-if [ -d "grc-frontend/.next/standalone" ]; then
-    echo "📋 Staging compiled Next.js standalone runtime..."
-    cp -r grc-frontend/.next/standalone/. "$STAGE_DIR/grc-frontend/"
-    if [ -d "$STAGE_DIR/grc-frontend/grc-frontend" ]; then
-        cp -r "$STAGE_DIR/grc-frontend/grc-frontend/." "$STAGE_DIR/grc-frontend/"
-        rm -rf "$STAGE_DIR/grc-frontend/grc-frontend"
-    fi
-    mkdir -p "$STAGE_DIR/grc-frontend/public"
-    cp -r grc-frontend/public/. "$STAGE_DIR/grc-frontend/public/"
-    mkdir -p "$STAGE_DIR/grc-frontend/.next/static"
-    cp -r grc-frontend/.next/static/. "$STAGE_DIR/grc-frontend/.next/static/"
-    cp grc-frontend/package.json "$STAGE_DIR/grc-frontend/package.json" 2>/dev/null || true
-else
-    echo "⚠️  .next/standalone not found. Staging raw frontend tree..."
-    cp -r grc-frontend/. "$STAGE_DIR/grc-frontend/"
-    rm -rf "$STAGE_DIR/grc-frontend/node_modules" \
-           "$STAGE_DIR/grc-frontend/.next" \
-           "$STAGE_DIR/grc-frontend/.env"*
+echo "📋 Staging compiled Next.js standalone runtime..."
+cp -r grc-frontend/.next/standalone/. "$STAGE_DIR/grc-frontend/"
+if [ -d "$STAGE_DIR/grc-frontend/grc-frontend" ]; then
+    cp -r "$STAGE_DIR/grc-frontend/grc-frontend/." "$STAGE_DIR/grc-frontend/"
+    rm -rf "$STAGE_DIR/grc-frontend/grc-frontend"
 fi
+mkdir -p "$STAGE_DIR/grc-frontend/public"
+cp -r grc-frontend/public/. "$STAGE_DIR/grc-frontend/public/"
+mkdir -p "$STAGE_DIR/grc-frontend/.next/static"
+cp -r grc-frontend/.next/static/. "$STAGE_DIR/grc-frontend/.next/static/"
+cp grc-frontend/package.json "$STAGE_DIR/grc-frontend/package.json"
 
 # Stage bundled framework library
 if [ -d "Frameworks" ]; then
@@ -169,36 +214,30 @@ fi
 # 8. Create payload.zip archive
 PAYLOAD_ZIP="payload.zip"
 OUTPUT_ZIP="update-EdgeGRC.zip"
-rm -f "$PAYLOAD_ZIP" "$OUTPUT_ZIP"
+rm -f "$PAYLOAD_ZIP" "$OUTPUT_ZIP" signature.sig
 
 echo "🗜️  Creating payload.zip from verified stage..."
 
-PYTHON_EXEC="python3"
-if [ -f "grc-backend/venv/bin/python" ]; then
-    PYTHON_EXEC="grc-backend/venv/bin/python"
-fi
+"$PYTHON_EXEC" - "$STAGE_DIR" "$PAYLOAD_ZIP" <<'PY'
+import os
+import sys
+import zipfile
 
-if command -v zip >/dev/null 2>&1; then
-    (cd "$STAGE_DIR" && zip -r "$REPO_DIR/$PAYLOAD_ZIP" .)
-else
-    $PYTHON_EXEC -c "
-import zipfile, os
-
-stage_dir = r'$STAGE_DIR'
-output_zip = r'$PAYLOAD_ZIP'
-
-with zipfile.ZipFile(output_zip, 'w', zipfile.ZIP_DEFLATED) as z:
-    for root, dirs, files in os.walk(stage_dir):
-        for file in files:
-            full_path = os.path.join(root, file)
-            rel_path = os.path.relpath(full_path, stage_dir)
-            z.write(full_path, rel_path)
-"
-fi
+stage_dir, output_zip = sys.argv[1:]
+with zipfile.ZipFile(output_zip, "w", zipfile.ZIP_DEFLATED) as archive:
+    for root, _, files in os.walk(stage_dir):
+        for filename in files:
+            file_path = os.path.join(root, filename)
+            archive.write(file_path, os.path.relpath(file_path, stage_dir))
+PY
 
 echo ""
 
 # 9. Cryptographically Sign the Update Payload
+if [ ! -f "$PRIVATE_KEY" ]; then
+    echo "❌ Signing key disappeared before signing; refusing to create an unsigned update."
+    exit 1
+fi
 if [ -f "grc-backend/configs/vendor_private.pem" ]; then
     echo "🔒 Cryptographically signing payload with vendor_private.pem..."
     $PYTHON_EXEC -c "
@@ -229,20 +268,83 @@ except Exception as e:
     
     if [ $? -eq 0 ]; then
         rm -f "$PAYLOAD_ZIP" signature.sig
-        echo "=========================================="
-        echo "✅ Signed Update package ready: ${OUTPUT_ZIP} (v${NEW_VERSION})"
-        if command -v du >/dev/null 2>&1; then
-            echo "   Size: $(du -h "$OUTPUT_ZIP" | cut -f1)"
-        fi
-        echo "=========================================="
+        echo "✅ Signature created; validating package structure..."
     else
         echo "❌ Signing failed! Leaving payload as ${PAYLOAD_ZIP}"
     fi
-else
-    echo "⚠️  WARNING: grc-backend/configs/vendor_private.pem not found!"
-    echo "The update will be packaged without a signature and will be rejected by the appliance."
-    mv "$PAYLOAD_ZIP" "$OUTPUT_ZIP"
-    echo "=========================================="
-    echo "⚠️ Unsigned Update package ready: ${OUTPUT_ZIP} (v${NEW_VERSION})"
-    echo "=========================================="
 fi
+
+"$PYTHON_EXEC" - "$PUBLIC_KEY" "$OUTPUT_ZIP" <<'PY'
+import io
+import os
+import stat
+import sys
+import zipfile
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+
+public_path, package_path = sys.argv[1:]
+if os.path.getsize(package_path) > 500 * 1024 * 1024:
+    raise SystemExit("Generated update package exceeds the appliance's 500 MB upload limit.")
+with open(public_path, "rb") as key_file:
+    public_key = load_pem_public_key(key_file.read())
+
+with zipfile.ZipFile(package_path) as package:
+    wrapper_names = package.namelist()
+    if len(wrapper_names) != len(set(wrapper_names)) or set(wrapper_names) != {"payload.zip", "signature.sig"}:
+        raise SystemExit("Generated update package has an invalid wrapper structure.")
+    if package.testzip():
+        raise SystemExit("Generated update package failed its ZIP integrity check.")
+    payload_data = package.read("payload.zip")
+    signature = package.read("signature.sig")
+
+public_key.verify(signature, payload_data, padding.PKCS1v15(), hashes.SHA256())
+with zipfile.ZipFile(io.BytesIO(payload_data)) as payload:
+    payload_members = payload.infolist()
+    payload_names = [member.filename for member in payload_members]
+    if len(payload_names) != len(set(payload_names)):
+        raise SystemExit("Payload contains duplicate archive paths.")
+    expanded_size = 0
+    for member in payload_members:
+        name = member.filename
+        normalized_name = os.path.normpath(name)
+        if (
+            not name
+            or "\\" in name
+            or any(part in {".", ".."} for part in name.split("/"))
+            or os.path.isabs(name)
+            or normalized_name == ".."
+            or normalized_name.startswith(".." + os.path.sep)
+            or (len(name) > 1 and name[1] == ":")
+        ):
+            raise SystemExit("Payload contains an unsafe archive path.")
+        if stat.S_ISLNK(member.external_attr >> 16):
+            raise SystemExit("Payload must not contain symbolic links.")
+        if not member.is_dir():
+            expanded_size += member.file_size
+            if expanded_size > 2 * 1024 * 1024 * 1024:
+                raise SystemExit("Expanded payload exceeds the appliance's 2 GB limit.")
+    required = {
+        "grc-backend/manage.py",
+        "grc-frontend/server.js",
+        "grc-frontend/public/version.json",
+    }
+    if not required.issubset(payload_names):
+        raise SystemExit("Payload is missing required backend or frontend runtime files.")
+    if not any(name.startswith("grc-frontend/.next/static/") for name in payload_names):
+        raise SystemExit("Payload is missing the built frontend static assets.")
+    if "grc-backend/configs/vendor_private.pem" in payload_names:
+        raise SystemExit("Payload must not contain the update signing private key.")
+    if payload.testzip():
+        raise SystemExit("Payload failed its ZIP integrity check.")
+    if payload.testzip():
+        raise SystemExit("Payload failed its ZIP integrity check.")
+PY
+
+echo "=========================================="
+echo "✅ Signed Update package ready: ${OUTPUT_ZIP} (v${NEW_VERSION})"
+if command -v du >/dev/null 2>&1; then
+    echo "   Size: $(du -h "$OUTPUT_ZIP" | cut -f1)"
+fi
+echo "=========================================="

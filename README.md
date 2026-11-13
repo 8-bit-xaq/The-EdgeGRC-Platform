@@ -124,6 +124,15 @@ Edge-GRC supports cryptographically verified updates directly through the Admin 
 
 To publish automatic main-branch packages, configure the GitHub Actions repository secret `UPDATE_SIGNING_PRIVATE_KEY` with the PEM private key matching `grc-backend/configs/update_pub.pem`. The `Signed main-branch update` workflow builds and publishes a signed package for each current `main` commit; the private key must never be committed to the repository.
 
+To build a manual package, install frontend dependencies with `npm ci` in
+`grc-frontend` and ensure the Python interpreter used by `build-update.sh` has
+`cryptography` installed. Place the matching signing key at
+`grc-backend/configs/vendor_private.pem` with owner-only permissions, then run
+`./build-update.sh` from any directory in the repository. The script requires a
+successful Next.js standalone build, refuses missing or mismatched signing keys,
+and validates the signed `update-EdgeGRC.zip` structure before reporting success.
+The private key is not included in the package.
+
 ---
 
 ## 🧪 Development Checks

@@ -417,7 +417,9 @@ class MainBranchUpdateViewTests(TestCase):
 
 
 class SignedUpdateVerificationTests(SimpleTestCase):
-    def create_signed_package(self, root, payload_bytes=b"trusted payload", signed_payload=None):
+    def create_signed_package(
+        self, root, payload_bytes=b"trusted payload", signed_payload=None, extra_entries=()
+    ):
         config_dir = root / "configs"
         config_dir.mkdir()
         private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -438,16 +440,20 @@ class SignedUpdateVerificationTests(SimpleTestCase):
         with zipfile.ZipFile(package_path, "w") as archive:
             archive.writestr("payload.zip", payload_bytes)
             archive.writestr("signature.sig", signature)
+            for name, content in extra_entries:
+                archive.writestr(name, content)
         return package_path
 
     @staticmethod
-    def make_main_payload(commit):
+    def make_main_payload(commit, extra_entries=()):
         payload = io.BytesIO()
         with zipfile.ZipFile(payload, "w") as archive:
             archive.writestr(
                 "grc-frontend/public/version.json",
                 f'{{"version":"1.0.0","commit":"{commit}"}}',
             )
+            for name, content in extra_entries:
+                archive.writestr(name, content)
         return payload.getvalue()
 
     def test_valid_signature_and_commit_schedules_verified_main_update(self):
@@ -487,6 +493,75 @@ class SignedUpdateVerificationTests(SimpleTestCase):
                 {path.name for path in root.iterdir()},
                 {"configs", "update.zip"},
             )
+
+    def test_package_with_unexpected_outer_archive_entry_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(
+                root,
+                extra_entries=(("unexpected.txt", b"unexpected"),),
+            )
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertIn("only payload.zip and signature.sig", str(error.exception))
+            thread.assert_not_called()
+
+    def test_oversized_payload_entry_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(root, payload_bytes=b"payload")
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.MAX_UPDATE_PACKAGE_SIZE", 5),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertEqual(error.exception.status_code, 413)
+            thread.assert_not_called()
+
+    def test_unsafe_payload_path_is_rejected_before_update_is_started(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            payload_bytes = self.make_main_payload(
+                "c" * 40,
+                extra_entries=(("../outside.txt", b"unsafe"),),
+            )
+            package_path = self.create_signed_package(root, payload_bytes=payload_bytes)
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertIn("unsafe archive path", str(error.exception))
+            thread.assert_not_called()
+
+    def test_expanded_payload_limit_is_enforced(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            payload_bytes = self.make_main_payload(
+                "c" * 40,
+                extra_entries=(("large.txt", b"012345"),),
+            )
+            package_path = self.create_signed_package(root, payload_bytes=payload_bytes)
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.MAX_UPDATE_EXPANDED_SIZE", 5),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertEqual(error.exception.status_code, 413)
+            thread.assert_not_called()
 
     def test_signed_package_for_different_commit_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
