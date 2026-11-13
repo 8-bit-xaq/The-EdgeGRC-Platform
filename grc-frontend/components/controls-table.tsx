@@ -195,7 +195,6 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         c.id.toLowerCase().includes(q) || 
         c.description.toLowerCase().includes(q) ||
         c.requirement_title?.toLowerCase().includes(q) ||
-        c.process_mechanism?.toLowerCase().includes(q) ||
         c.framework?.toLowerCase().includes(q)
       
       const matchesFramework = frameworkFilter === "All" || c.framework === frameworkFilter
@@ -618,11 +617,6 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                               )}
                             </TableCell>
                             <TableCell className="whitespace-normal break-words text-pretty align-top text-muted-foreground">
-                              {control.process_mechanism && (
-                                <p className="text-[13px] font-semibold text-foreground mb-1">
-                                  {control.process_mechanism}
-                                </p>
-                              )}
                               <p className="mb-2">{control.description}</p>
 
                               {/* Render Tags */}

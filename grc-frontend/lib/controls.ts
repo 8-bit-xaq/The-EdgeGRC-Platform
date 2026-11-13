@@ -75,7 +75,6 @@ export interface ComplianceControl {
   control_id: string
   framework?: string
   requirement_title?: string
-  process_mechanism?: string
   description: string
   status: ControlStatus
   control_effectiveness: EffectivenessStatus

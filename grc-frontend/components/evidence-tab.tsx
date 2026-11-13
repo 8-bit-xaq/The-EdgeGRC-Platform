@@ -145,7 +145,7 @@ export function EvidenceTab({ control, role, onSave }: EvidenceTabProps) {
       </div>
 
       <div className="grid gap-2">
-        <Label>Implementation Narrative</Label>
+        <Label>Evidence Narrative</Label>
         {isEvidenceLocked ? (
           <p className="whitespace-pre-wrap rounded-md border border-border bg-card p-3 text-sm text-muted-foreground">
             {evidence || "No narrative provided."}
