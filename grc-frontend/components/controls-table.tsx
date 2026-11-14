@@ -10,8 +10,9 @@
  */
 
 import { useEffect, useMemo, useState, Fragment } from "react"
-import { Search, Pencil, ListFilter, Eye, ChevronDown, AlertTriangle, ListTodo, X, ClipboardCheck, CalendarClock } from "lucide-react"
+import { Search, Pencil, ListFilter, Eye, ChevronDown, AlertTriangle, ListTodo, X, ClipboardCheck, CalendarClock, Trash2 } from "lucide-react"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -31,6 +32,14 @@ import {
 } from "@/components/ui/select"
 import { EditEvidenceDialog } from "@/components/edit-evidence-dialog"
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import {
   CONTROL_STATUSES,
   EFFECTIVENESS_STATUSES,
   type ComplianceControl,
@@ -46,6 +55,44 @@ import { useControls } from "@/hooks/use-grc-data"
 import { useQueryClient } from "@tanstack/react-query"
 
 type StatusFilter = "All" | ControlStatus
+
+interface FrameworkRemovalCheck {
+  error?: string
+  framework: string
+  has_work: boolean
+  work_summary: Record<string, number>
+  affected_control_count: number
+  affected_controls: Array<{ control_id: string; work: string[] }>
+  controls_truncated: boolean
+  confirmation_token: string
+}
+
+function isFrameworkRemovalCheck(value: unknown): value is FrameworkRemovalCheck {
+  if (!value || typeof value !== "object") return false
+  const check = value as Record<string, unknown>
+  return (
+    typeof check.confirmation_token === "string"
+    && typeof check.framework === "string"
+    && typeof check.has_work === "boolean"
+    && typeof check.work_summary === "object"
+    && check.work_summary !== null
+    && typeof check.affected_control_count === "number"
+    && Array.isArray(check.affected_controls)
+    && typeof check.controls_truncated === "boolean"
+  )
+}
+
+const FRAMEWORK_WORK_LABELS: Record<string, string> = {
+  evaluation: "Evaluated controls",
+  evidence: "Controls with evidence or proof files",
+  audit: "Controls with audit schedules, test plans, or assessments",
+  remediation: "Controls with remediation tasks",
+  risk: "Controls linked to risks",
+}
+
+function getControlGroupKey(framework: string | null | undefined, requirementTitle: string | null | undefined) {
+  return JSON.stringify([framework || null, requirementTitle || "General Requirements"])
+}
 
 interface ControlsTableProps {
   targetControlId?: string | null
@@ -93,6 +140,11 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
   const [editing, setEditing] = useState<ComplianceControl | null>(null)
   const [role, setRole] = useState<string | null>(null)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({})
+  const [frameworkToRemove, setFrameworkToRemove] = useState<string | null>(null)
+  const [removalCheck, setRemovalCheck] = useState<FrameworkRemovalCheck | null>(null)
+  const [isRemovingFramework, setIsRemovingFramework] = useState(false)
+  const [removalUsername, setRemovalUsername] = useState("")
+  const [removalPassword, setRemovalPassword] = useState("")
 
   useEffect(() => {
     setRole(localStorage.getItem("grc_role") || sessionStorage.getItem("grc_role"));
@@ -103,8 +155,8 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
       const targetControl = controls.find((c) => c.id === targetControlId)
       if (targetControl) {
         setEditing(targetControl)
-        const groupName = targetControl.requirement_title || "General Requirements"
-        setExpandedGroups((prev) => ({ ...prev, [groupName]: true }))
+        const groupKey = getControlGroupKey(targetControl.framework, targetControl.requirement_title)
+        setExpandedGroups((prev) => ({ ...prev, [groupKey]: true }))
         onClearTarget?.() 
       }
     }
@@ -123,6 +175,16 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
       if (c.framework) set.add(c.framework)
     })
     return Array.from(set).sort()
+  }, [controls])
+
+  const frameworkControlCounts = useMemo(() => {
+    const counts = new Map<string, number>()
+    controls.forEach((control) => {
+      if (control.framework) {
+        counts.set(control.framework, (counts.get(control.framework) ?? 0) + 1)
+      }
+    })
+    return counts
   }, [controls])
 
   const filtered = useMemo(() => {
@@ -146,20 +208,81 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
   }, [controls, query, frameworkFilter, statusFilter, designFilter, operatingFilter])
 
   const groupedControls = useMemo(() => {
-    const groups: Record<string, ComplianceControl[]> = {}
+    const groups: Record<string, { framework: string | null; title: string; controls: ComplianceControl[] }> = {}
     filtered.forEach((c) => {
-      const groupName = c.requirement_title || "General Requirements"
-      if (!groups[groupName]) groups[groupName] = []
-      groups[groupName].push(c)
+      const title = c.requirement_title || "General Requirements"
+      const framework = c.framework || null
+      const groupKey = getControlGroupKey(framework, title)
+      if (!groups[groupKey]) groups[groupKey] = { framework, title, controls: [] }
+      groups[groupKey].controls.push(c)
     })
     return groups
   }, [filtered])
 
-  const toggleGroup = (groupName: string) => {
+  const toggleGroup = (groupKey: string) => {
     setExpandedGroups((prev) => ({
       ...prev,
-      [groupName]: !prev[groupName],
+      [groupKey]: !prev[groupKey],
     }))
+  }
+
+  function closeFrameworkRemoval() {
+    if (isRemovingFramework) return
+    setFrameworkToRemove(null)
+    setRemovalCheck(null)
+    setRemovalUsername("")
+    setRemovalPassword("")
+  }
+
+  async function handleRemoveFramework(
+    confirmationToken?: string,
+    credentials?: { username: string; password: string },
+  ) {
+    if (!frameworkToRemove) return
+
+    setIsRemovingFramework(true)
+    try {
+      const response = await fetchApi("frameworks/remove/", {
+        method: "POST",
+        body: JSON.stringify({
+          framework: frameworkToRemove,
+          ...(confirmationToken ? { confirmation_token: confirmationToken } : {}),
+          ...(credentials ? credentials : {}),
+        }),
+      })
+      const data = await response.json()
+
+      if (response.status === 409 && isFrameworkRemovalCheck(data)) {
+        setRemovalCheck(data)
+        return
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          typeof data.error === "string" ? data.error : "Framework removal failed.",
+        )
+      }
+
+      setFrameworkToRemove(null)
+      setRemovalCheck(null)
+      setRemovalUsername("")
+      setRemovalPassword("")
+      setFrameworkFilter("All")
+      await queryClient.invalidateQueries({ queryKey: ["controls"] })
+      toast.success(`${frameworkToRemove} removed`, {
+        description: typeof data.warning === "string"
+          ? data.warning
+          : `${data.deleted_controls} controls were removed.`,
+      })
+    } catch (error) {
+      console.error("Failed to remove framework", error)
+      toast.error(
+        error instanceof Error ? error.message : "Framework removal failed.",
+      )
+    } finally {
+      setIsRemovingFramework(false)
+      setRemovalPassword("")
+    }
   }
 
   async function handleSave(updated: ComplianceControl) {
@@ -342,6 +465,86 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         </div>
       </div>
 
+      {availableFrameworks.length > 0 && (
+        <div className="border-b border-border px-5 py-4">
+          <div className="mb-3">
+            <h3 className="text-sm font-semibold text-foreground">Imported frameworks</h3>
+            <p className="text-xs text-muted-foreground">Select a framework to focus the controls matrix.</p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            <button
+              type="button"
+              aria-pressed={frameworkFilter === "All"}
+              aria-label={`Show all frameworks, ${controls.length} controls`}
+              onClick={() => setFrameworkFilter("All")}
+              className={cn(
+                "flex min-h-[76px] min-w-0 flex-col items-start justify-center rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                frameworkFilter === "All"
+                  ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                  : "border-border bg-background hover:border-primary/40 hover:bg-accent/50",
+              )}
+            >
+              <span className="text-sm font-medium text-foreground">All frameworks</span>
+              <span className="mt-1 text-xs text-muted-foreground">
+                {controls.length.toLocaleString()} controls
+              </span>
+            </button>
+            {availableFrameworks.map((framework) => {
+              const isSelected = frameworkFilter === framework
+              const count = frameworkControlCounts.get(framework) ?? 0
+              return (
+                <div
+                  key={framework}
+                  className={cn(
+                    "flex min-h-[76px] min-w-0 items-center rounded-lg border transition-colors",
+                    isSelected
+                      ? "border-primary bg-primary/5 ring-1 ring-primary/20"
+                      : "border-border bg-background hover:border-primary/40",
+                  )}
+                >
+                  <button
+                    type="button"
+                    aria-pressed={isSelected}
+                    aria-label={`Show ${framework}, ${count} controls`}
+                    onClick={() => setFrameworkFilter(framework)}
+                    className="flex min-h-[74px] min-w-0 flex-1 flex-col items-start justify-center rounded-l-lg px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <span className="w-full truncate text-sm font-medium text-foreground" title={framework}>
+                      {framework}
+                    </span>
+                    <span className="mt-1 text-xs text-muted-foreground">
+                      {count.toLocaleString()} {count === 1 ? "control" : "controls"}
+                    </span>
+                  </button>
+                  {role === "Admin" && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="mr-2 size-8 shrink-0 text-muted-foreground hover:text-destructive"
+                      aria-label={`Remove ${framework}`}
+                      title={`Remove ${framework}`}
+                      onClick={() => {
+                        setFrameworkToRemove(framework)
+                        setRemovalCheck(null)
+                        setRemovalUsername(
+                          localStorage.getItem("grc_username")
+                            || sessionStorage.getItem("grc_username")
+                            || "",
+                        )
+                        setRemovalPassword("")
+                      }}
+                    >
+                      <Trash2 className="size-4" aria-hidden />
+                    </Button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       <div className="overflow-x-auto">
         <Table className="min-w-[720px] table-fixed">
           <TableHeader>
@@ -368,164 +571,171 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
                 </TableCell>
               </TableRow>
             ) : (
-              Object.entries(groupedControls).map(([groupName, groupControls]) => {
-                const isExpanded = query.trim() !== "" || designFilter !== "All" || operatingFilter !== "All" || expandedGroups[groupName]
+              Object.entries(groupedControls)
+                .sort(([, left], [, right]) => (left.framework ?? "").localeCompare(right.framework ?? ""))
+                .map(([groupKey, group]) => {
+                  const isExpanded = query.trim() !== "" || designFilter !== "All" || operatingFilter !== "All" || expandedGroups[groupKey]
 
-                return (
-                  <Fragment key={groupName}>
-                    <TableRow 
-                      className="bg-muted/40 hover:bg-muted/60 cursor-pointer border-b border-border"
-                      onClick={() => toggleGroup(groupName)}
-                    >
-                      <TableCell colSpan={4} className="py-3">
-                        <div className="flex items-center gap-2 font-medium text-foreground">
-                          <ChevronDown 
-                            className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-200", isExpanded ? "" : "-rotate-90")}
-                            aria-hidden 
-                          />
-                          {groupName}
-                          <Badge variant="secondary" className="ml-2 bg-background font-mono text-[10px]">
-                            {groupControls.length}
-                          </Badge>
-                        </div>
-                      </TableCell>
-                    </TableRow>
+                  return (
+                    <Fragment key={groupKey}>
+                      <TableRow
+                        className="bg-muted/40 hover:bg-muted/60 cursor-pointer border-b border-border"
+                        onClick={() => toggleGroup(groupKey)}
+                      >
+                        <TableCell colSpan={4} className="py-3">
+                          <div className="flex flex-wrap items-center gap-2 font-medium text-foreground">
+                            <ChevronDown
+                              className={cn("size-4 shrink-0 text-muted-foreground transition-transform duration-200", isExpanded ? "" : "-rotate-90")}
+                              aria-hidden
+                            />
+                            {group.framework && (
+                              <Badge variant="outline" className="max-w-[220px] border-primary/25 bg-primary/10 text-xs font-medium text-primary" title={group.framework}>
+                                <span className="min-w-0 truncate">{group.framework}</span>
+                              </Badge>
+                            )}
+                            <span>{group.title}</span>
+                            <Badge variant="secondary" className="ml-2 bg-background font-mono text-[10px]">
+                              {group.controls.length}
+                            </Badge>
+                          </div>
+                        </TableCell>
+                      </TableRow>
 
-                    {isExpanded && groupControls.map((control) => {
-                      const openTasksCount = control.remediation_tasks?.filter(t => t.status !== 'Resolved').length || 0;
-                      const isPendingQA = control.assessments?.some(a => a.status === 'In QA Review');
-                      
-                      return (
-                        <TableRow key={control.id} className="bg-background">
-                          <TableCell className="align-top font-mono text-sm font-medium pl-9">
-                            <div>{control.id}</div>
-                            {control.framework && (
-                              <div className="mt-1">
-                                <Badge variant="outline" className="text-[10px] font-normal tracking-tight px-1.5 py-0 bg-muted/40 text-muted-foreground border-border max-w-[120px] truncate block" title={control.framework}>
-                                  {control.framework}
-                                </Badge>
-                              </div>
-                            )}
-                          </TableCell>
-                          <TableCell className="whitespace-normal break-words text-pretty align-top text-muted-foreground">
-                            {control.process_mechanism && (
-                              <p className="text-[13px] font-semibold text-foreground mb-1">
-                                {control.process_mechanism}
-                              </p>
-                            )}
-                            <p className="mb-2">{control.description}</p>
-                            
-                            {/* Render Tags */}
-                            {control.tags && control.tags.length > 0 && (
-                              <div className="flex flex-wrap gap-1 mb-2">
-                                {control.tags.map(tag => (
-                                  <Badge key={tag} variant="secondary" className="text-[10px] bg-primary/10 text-primary border-primary/20">
-                                    #{tag}
+                      {isExpanded && group.controls.map((control) => {
+                        const openTasksCount = control.remediation_tasks?.filter(t => t.status !== 'Resolved').length || 0;
+                        const isPendingQA = control.assessments?.some(a => a.status === 'In QA Review');
+
+                        return (
+                          <TableRow key={control.id} className="bg-background">
+                            <TableCell className="align-top font-mono text-sm font-medium pl-9">
+                              <div>{control.id}</div>
+                              {control.framework && (
+                                <div className="mt-1">
+                                  <Badge variant="outline" className="max-w-[120px] border-primary/25 bg-primary/10 px-1.5 py-0 text-[10px] font-medium tracking-tight text-primary" title={control.framework}>
+                                    <span className="min-w-0 truncate">{control.framework}</span>
                                   </Badge>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Render Automated Cross-Walk Links */}
-                            {control.cross_walked_control_ids && control.cross_walked_control_ids.length > 0 && (
-                              <div className="mb-1 text-[11px] text-muted-foreground">
-                                <span className="font-semibold text-foreground">Cross-walked to: </span> 
-                                {control.cross_walked_control_ids.join(", ")}
-                              </div>
-                            )}
-
-                            {/* Render Tied Risks */}
-                            {control.mitigated_risk_ids && control.mitigated_risk_ids.length > 0 && (
-                              <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                                <span className="font-semibold text-foreground">Mitigates Risk: </span> 
-                                {control.mitigated_risk_ids.map(rId => (
-                                  <button
-                                    key={rId}
-                                    type="button"
-                                    onClick={() => onRiskClick?.(rId)}
-                                    className="flex items-center gap-0.5 rounded border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-500"
-                                    aria-label={`View risk ${rId} in the Risk Register`}
-                                  >
-                                    <AlertTriangle className="size-3" />
-                                    {rId}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* --- Upcoming Schedule Indicator --- */}
-                            {control.testing_frequency && control.testing_frequency !== "None" && control.next_audit_date && (
-                              <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                                <span className="font-semibold text-foreground">Audit Schedule: </span> 
-                                <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20">
-                                  <CalendarClock className="size-3" />
-                                  {control.testing_frequency}
-                                </span>
-                                <span className="text-muted-foreground font-medium">
-                                  Next Due: {new Date(control.next_audit_date + "T12:00:00Z").toLocaleDateString()}
-                                </span>
-                                <span className="text-muted-foreground opacity-75">
-                                  (Evidence requested: {new Date(new Date(control.next_audit_date + "T12:00:00Z").setDate(new Date(control.next_audit_date + "T12:00:00Z").getDate() - 30)).toLocaleDateString()})
-                                </span>
-                              </div>
-                            )}
-
-                            {/* Render Open POA&M Tasks Indicator */}
-                            {openTasksCount > 0 && (
-                              <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                                <span className="font-semibold text-foreground">Active POA&M: </span> 
-                                <span className="flex items-center gap-0.5 text-destructive font-medium bg-destructive/10 px-1.5 py-0.5 rounded border border-destructive/20">
-                                  <ListTodo className="size-3" />
-                                  {openTasksCount} Unresolved Task{openTasksCount !== 1 ? 's' : ''}
-                                </span>
-                              </div>
-                            )}
-
-                            {/* Render Pending QA Indicator */}
-                            {isPendingQA && (
-                              <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
-                                <span className="font-semibold text-foreground">Active Audit: </span> 
-                                <span className="flex items-center gap-0.5 text-amber-600 dark:text-amber-500 font-medium bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
-                                  <ClipboardCheck className="size-3" />
-                                  Pending QA Review
-                                </span>
-                              </div>
-                            )}
-                            
-                            <div className="flex flex-wrap gap-2 mt-2">
-                              {control.control_effectiveness && control.control_effectiveness !== "Not Tested" && (
-                                <Badge variant="outline" className={cn("text-[10px] font-medium border-transparent", control.control_effectiveness === "Deficient" ? "bg-destructive/15 text-destructive" : "bg-success/15 text-success")}>
-                                  Design: {control.control_effectiveness}
-                                </Badge>
+                                </div>
                               )}
-                              {control.implementation_effectiveness && control.implementation_effectiveness !== "Not Tested" && (
-                                <Badge variant="outline" className={cn("text-[10px] font-medium border-transparent", control.implementation_effectiveness === "Deficient" ? "bg-destructive/15 text-destructive" : "bg-success/15 text-success")}>
-                                  Operation: {control.implementation_effectiveness}
-                                </Badge>
+                            </TableCell>
+                            <TableCell className="whitespace-normal break-words text-pretty align-top text-muted-foreground">
+                              {control.process_mechanism && (
+                                <p className="text-[13px] font-semibold text-foreground mb-1">
+                                  {control.process_mechanism}
+                                </p>
                               )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="align-top">
-                            <StatusBadge status={control.status} />
-                          </TableCell>
-                          <TableCell className="text-right align-top">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="size-8"
-                              onClick={() => setEditing(control)}
-                              aria-label={isReadOnlyRole ? `View control ${control.id}` : `Edit control ${control.id}`}
-                              title={isReadOnlyRole ? "View control" : "Edit control"}
-                            >
-                              {isReadOnlyRole ? <Eye className="size-4" aria-hidden="true" /> : <Pencil className="size-4" aria-hidden="true" />}
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    })}
-                  </Fragment>
-                )
-              })
+                              <p className="mb-2">{control.description}</p>
+
+                              {/* Render Tags */}
+                              {control.tags && control.tags.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mb-2">
+                                  {control.tags.map(tag => (
+                                    <Badge key={tag} variant="secondary" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                                      #{tag}
+                                    </Badge>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* Render Automated Cross-Walk Links */}
+                              {control.cross_walked_control_ids && control.cross_walked_control_ids.length > 0 && (
+                                <div className="mb-1 text-[11px] text-muted-foreground">
+                                  <span className="font-semibold text-foreground">Cross-walked to: </span>
+                                  {control.cross_walked_control_ids.join(", ")}
+                                </div>
+                              )}
+
+                              {/* Render Tied Risks */}
+                              {control.mitigated_risk_ids && control.mitigated_risk_ids.length > 0 && (
+                                <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                                  <span className="font-semibold text-foreground">Mitigates Risk: </span>
+                                  {control.mitigated_risk_ids.map(rId => (
+                                    <button
+                                      key={rId}
+                                      type="button"
+                                      onClick={() => onRiskClick?.(rId)}
+                                      className="flex items-center gap-0.5 rounded border border-amber-500/20 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-600 hover:bg-amber-500/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:text-amber-500"
+                                      aria-label={`View risk ${rId} in the Risk Register`}
+                                    >
+                                      <AlertTriangle className="size-3" />
+                                      {rId}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+
+                              {/* --- Upcoming Schedule Indicator --- */}
+                              {control.testing_frequency && control.testing_frequency !== "None" && control.next_audit_date && (
+                                <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                                  <span className="font-semibold text-foreground">Audit Schedule: </span>
+                                  <span className="flex items-center gap-1 text-purple-600 dark:text-purple-400 font-medium bg-purple-500/10 px-1.5 py-0.5 rounded border border-purple-500/20">
+                                    <CalendarClock className="size-3" />
+                                    {control.testing_frequency}
+                                  </span>
+                                  <span className="text-muted-foreground font-medium">
+                                    Next Due: {new Date(control.next_audit_date + "T12:00:00Z").toLocaleDateString()}
+                                  </span>
+                                  <span className="text-muted-foreground opacity-75">
+                                    (Evidence requested: {new Date(new Date(control.next_audit_date + "T12:00:00Z").setDate(new Date(control.next_audit_date + "T12:00:00Z").getDate() - 30)).toLocaleDateString()})
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Render Open POA&M Tasks Indicator */}
+                              {openTasksCount > 0 && (
+                                <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                                  <span className="font-semibold text-foreground">Active POA&M: </span>
+                                  <span className="flex items-center gap-0.5 text-destructive font-medium bg-destructive/10 px-1.5 py-0.5 rounded border border-destructive/20">
+                                    <ListTodo className="size-3" />
+                                    {openTasksCount} Unresolved Task{openTasksCount !== 1 ? 's' : ''}
+                                  </span>
+                                </div>
+                              )}
+
+                              {/* Render Pending QA Indicator */}
+                              {isPendingQA && (
+                                <div className="mb-2 flex items-center flex-wrap gap-1.5 text-[11px] text-muted-foreground">
+                                  <span className="font-semibold text-foreground">Active Audit: </span>
+                                  <span className="flex items-center gap-0.5 text-amber-600 dark:text-amber-500 font-medium bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/20">
+                                    <ClipboardCheck className="size-3" />
+                                    Pending QA Review
+                                  </span>
+                                </div>
+                              )}
+
+                              <div className="flex flex-wrap gap-2 mt-2">
+                                {control.control_effectiveness && control.control_effectiveness !== "Not Tested" && (
+                                  <Badge variant="outline" className={cn("text-[10px] font-medium border-transparent", control.control_effectiveness === "Deficient" ? "bg-destructive/15 text-destructive" : "bg-success/15 text-success")}>
+                                    Design: {control.control_effectiveness}
+                                  </Badge>
+                                )}
+                                {control.implementation_effectiveness && control.implementation_effectiveness !== "Not Tested" && (
+                                  <Badge variant="outline" className={cn("text-[10px] font-medium border-transparent", control.implementation_effectiveness === "Deficient" ? "bg-destructive/15 text-destructive" : "bg-success/15 text-success")}>
+                                    Operation: {control.implementation_effectiveness}
+                                  </Badge>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="align-top">
+                              <StatusBadge status={control.status} />
+                            </TableCell>
+                            <TableCell className="text-right align-top">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8"
+                                onClick={() => setEditing(control)}
+                                aria-label={isReadOnlyRole ? `View control ${control.id}` : `Edit control ${control.id}`}
+                                title={isReadOnlyRole ? "View control" : "Edit control"}
+                              >
+                                {isReadOnlyRole ? <Eye className="size-4" aria-hidden="true" /> : <Pencil className="size-4" aria-hidden="true" />}
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </Fragment>
+                  )
+                })
             )}
           </TableBody>
         </Table>
@@ -544,6 +754,131 @@ export function ControlsTable({ targetControlId, onClearTarget, targetFilter, on
         userRole={role}
         onRiskClick={onRiskClick}
       />
+
+      <Dialog
+        open={frameworkToRemove !== null}
+        onOpenChange={(open) => !open && closeFrameworkRemoval()}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="size-4" aria-hidden />
+              {removalCheck?.has_work ? "Work found in this framework" : "Remove framework?"}
+            </DialogTitle>
+            <DialogDescription className="text-pretty">
+              {removalCheck?.has_work
+                ? `Removing ${frameworkToRemove} will permanently delete its controls and associated work. Review the affected controls before continuing.`
+                : `Remove ${frameworkToRemove} and all of its controls? This cannot be undone.`}
+            </DialogDescription>
+          </DialogHeader>
+
+          {removalCheck && (
+            <div className="space-y-3">
+              {removalCheck.error && (
+                <p className="text-sm text-muted-foreground">{removalCheck.error}</p>
+              )}
+              {removalCheck.has_work ? (
+                <>
+                  <ul className="space-y-1 text-sm text-foreground">
+                    {Object.entries(removalCheck.work_summary)
+                      .filter(([, count]) => count > 0)
+                      .map(([type, count]) => (
+                        <li key={type}>
+                          <span className="font-medium">{count}</span>{" "}
+                          {FRAMEWORK_WORK_LABELS[type] ?? type}
+                        </li>
+                      ))}
+                  </ul>
+                  <div className="max-h-40 overflow-y-auto rounded-md border border-border bg-muted/30 p-3">
+                    <p className="mb-2 text-xs font-medium text-foreground">
+                      Affected controls ({removalCheck.affected_control_count})
+                    </p>
+                    <ul className="space-y-1 text-xs text-muted-foreground">
+                      {removalCheck.affected_controls.map((control) => (
+                        <li key={control.control_id}>
+                          <span className="font-mono text-foreground">{control.control_id}</span>
+                          <span>: {control.work.map((type) => FRAMEWORK_WORK_LABELS[type] ?? type).join(", ")}</span>
+                        </li>
+                      ))}
+                    </ul>
+                    {removalCheck.controls_truncated && (
+                      <p className="mt-2 text-xs text-muted-foreground">
+                        Additional affected controls are not shown.
+                      </p>
+                    )}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Linked risk records will remain, but their links to these controls will be removed.
+                  </p>
+                  <div className="space-y-3 rounded-md border border-border p-3">
+                    <p className="text-sm font-medium text-foreground">
+                      Verify administrator credentials to continue.
+                    </p>
+                    <div className="space-y-2">
+                      <Label htmlFor="framework-removal-username">Administrator username</Label>
+                      <Input
+                        id="framework-removal-username"
+                        autoComplete="username"
+                        value={removalUsername}
+                        onChange={(event) => setRemovalUsername(event.target.value)}
+                        disabled={isRemovingFramework}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="framework-removal-password">Administrator password</Label>
+                      <Input
+                        id="framework-removal-password"
+                        type="password"
+                        autoComplete="current-password"
+                        value={removalPassword}
+                        onChange={(event) => setRemovalPassword(event.target.value)}
+                        disabled={isRemovingFramework}
+                      />
+                    </div>
+                  </div>
+                </>
+              ) : removalCheck.error ? (
+                <p className="text-sm text-muted-foreground">
+                  No work is currently recorded on these controls. Review the changed state before confirming removal.
+                </p>
+              ) : null}
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={isRemovingFramework}
+              onClick={closeFrameworkRemoval}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="destructive"
+              disabled={
+                isRemovingFramework
+                || Boolean(removalCheck?.has_work && (!removalUsername.trim() || !removalPassword))
+              }
+              onClick={() => handleRemoveFramework(
+                removalCheck?.confirmation_token,
+                removalCheck?.has_work
+                  ? { username: removalUsername.trim(), password: removalPassword }
+                  : undefined,
+              )}
+            >
+              {isRemovingFramework
+                ? "Removing..."
+                : removalCheck?.has_work
+                  ? "Remove anyway"
+                  : removalCheck?.error
+                    ? "Confirm removal"
+                    : "Check and remove"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   )
 }

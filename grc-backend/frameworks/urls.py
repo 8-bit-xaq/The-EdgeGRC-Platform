@@ -4,6 +4,7 @@ from .views import (
     JobDownloadView,
     ControlListCreateView, 
     ControlDetailView, 
+    FrameworkRemovalView,
     ProofUploadView, 
     ProofDeleteView, 
     AuditLogListView, 
@@ -24,6 +25,7 @@ from .views import (
     NotificationListView,
     NotificationUpdateView,
     SystemUpdateView,
+    MainBranchUpdateView,
     HTTPSConfigurationView,
     OrganizationSettingsView,
     FaviconView,
@@ -32,12 +34,17 @@ from .views import (
     VerifySessionView,
     ChangePasswordView,
     BulkControlImportView,
+    FrameworkLibraryView,
+    FrameworkLibraryFileView,
     HealthCheckView,
 )
 
 urlpatterns = [
+    path('frameworks/remove/', FrameworkRemovalView.as_view(), name='framework-remove'),
     path('controls/', ControlListCreateView.as_view()),
     path('controls/bulk-import/', BulkControlImportView.as_view(), name='bulk-control-import'),
+    path('framework-library/', FrameworkLibraryView.as_view(), name='framework-library'),
+    path('framework-library/<str:framework_id>/', FrameworkLibraryFileView.as_view(), name='framework-library-file'),
     path('controls/<str:control_id>/', ControlDetailView.as_view()),
     
     # Assessment & Test Plan endpoints
@@ -64,6 +71,7 @@ urlpatterns = [
     path('notifications/read/', NotificationUpdateView.as_view()), 
     path('notifications/<int:pk>/', NotificationUpdateView.as_view()),
     path('update/', SystemUpdateView.as_view()),
+    path('update/main/', MainBranchUpdateView.as_view(), name='main-branch-update'),
     path('system/https-config/', HTTPSConfigurationView.as_view(), name='https-config'),
     path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
     path('organization', OrganizationSettingsView.as_view()),

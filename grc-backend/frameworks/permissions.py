@@ -92,7 +92,8 @@ class AssessmentPermissions(BasePermission):
     - Contributors: Read-only.
     - Auditors: Can create, and can only edit/delete if status is "In Progress".
     - Reviewers: Cannot create or delete; can update assessments in "In QA Review"
-      unless they performed the assessment.
+      unless they performed the assessment. Assessment ownership is assigned at
+      creation and cannot be changed during review.
     """
     def has_permission(self, request, view):
         if request.method in SAFE_METHODS:

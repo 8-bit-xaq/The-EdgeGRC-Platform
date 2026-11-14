@@ -46,7 +46,8 @@ README for deployment details.
    onboarding wizard:
    - **Branding:** Set the legal company name, workspace title, and optional
      logo. The logo is resized before being saved.
-   - **Framework:** Import the initial framework as JSON.
+   - **Framework:** Choose a bundled framework or upload an initial JSON
+     framework.
    - **Complete:** Finish setup and open the dashboard.
 4. Later sign-ins take the user to the main workspace. The default initial
    view is Framework Management.
@@ -148,14 +149,39 @@ items are normalized into controls with an identifier, framework name,
 description, optional requirement grouping/process text/tags, and an initial
 Not Evaluated status.
 
+Administrators can also choose a bundled JSON framework from the appliance's
+`Frameworks/` directory. Bundled choices appear in both the Frameworks importer
+and the startup wizard, alongside the option to upload a JSON file. These
+choices stay collapsed until the user selects **Choose or upload a framework**.
+Framework files are included in fresh installations and signed platform update
+packages.
+
 After a framework is loaded, the importer collapses into a **Framework
 loaded** panel. An administrator can reopen it to add another framework. An
 import requires recognizable controls in the JSON.
 
+Administrators can remove a framework from its card in the controls matrix.
+Before removal, the application checks its controls for evaluations, evidence
+or proof files, audit schedules or test plans, assessment activity (including
+planned assessments), remediation tasks, and links to risks. If it finds work,
+the confirmation dialog summarizes the affected controls and requires a
+separate **Remove anyway** confirmation with the administrator's username and
+password. Credentials are verified by the backend and are required even when
+the current administrator session is active. Removing the framework deletes
+its controls and their associated assessment, evidence, test-plan, and
+remediation records; linked risk records remain but lose their links to the
+removed controls. If no work is recorded, the administrator still confirms
+the removal without a credential prompt.
+
 #### Controls table
 
-Controls are grouped by requirement title (or **General Requirements** when
-there is no title). The table includes filtering/search tools for:
+When multiple frameworks are loaded, framework overview cards show each
+framework's control count and provide a quick filter; **All frameworks**
+returns to the combined matrix. Controls are grouped by framework and
+requirement title (or **General Requirements** when there is no title), so
+frameworks with similarly named requirements remain distinct. Framework
+names are highlighted in the group headings and control rows. The table
+includes filtering/search tools for:
 
 - Framework
 - Control status
@@ -260,11 +286,12 @@ The create/edit dialog lets the user define the scenario and select mitigating
 controls and add an optional supporting attachment. Attachments use the
 application's secure upload rules, including a 25 MB size limit and supported
 document/file-type allowlist; choosing a new attachment replaces the existing
-one. Selecting a cross-walked control can select its related controls as a
-group. The table compares inherent and residual risk and shows the compensating
-controls. Selecting a risk ID from the dashboard or a control's **Mitigates
-Risk** links opens that risk in the register's edit dialog for roles permitted
-to manage risks.
+one. Cross-walked controls show the IDs of the related controls that will be
+selected with them. Selecting a cross-walked control can select its related
+controls as a group. The table compares inherent and residual risk and shows
+the compensating controls. Selecting a risk ID from the dashboard or a
+control's **Mitigates Risk** links opens that risk in the register's edit dialog
+for roles permitted to manage risks.
 Executive accounts are presented with a read-oriented view in the interface.
 
 ![Enterprise Risk Register showing risk ID, scenario, inherent score, controls, residual score, and actions](./images/risk-register.jpg)
@@ -337,9 +364,12 @@ Administrator-only appliance actions include:
   uploaded evidence files. The archive includes a portable export for either
   SQLite or PostgreSQL; SQLite backups also include a native database snapshot.
 - **Restore:** Upload a backup and confirm before restoring it.
-- **Platform update:** Upload an official update package. The backend checks
-  the package signature before applying it; the appliance restarts services,
-  interrupting active sessions.
+- **Platform update:** Check GitHub for the latest signed package built from
+  the repository's `main` branch, or upload an official update package
+  manually. Before installing either package, create a current system backup;
+  the automatic update requires explicit backup confirmation. The backend
+  verifies the package signature before applying it, and the appliance
+  restarts services, interrupting active sessions.
 - **HTTPS & trust:** Enable HTTPS by creating appliance certificates and
   download the public certificate for local trust configuration.
 - **Active sessions:** Inspect active devices and revoke a session.
@@ -368,11 +398,6 @@ for support without reviewing and approving their contents.
 The session timeout control describes how long an account can be inactive
 before its session expires. Administrator-only controls in this tab include
 HTTPS management and active-session management.
-
-![Organization Settings showing branding, backup and restore, platform updates, and the danger zone](./images/workspace-settings.jpg)
-
-*Administrator Organization Settings. Appliance and organization actions are
-not available to ordinary workspace roles.*
 
 ## 5. Roles and effective permissions
 

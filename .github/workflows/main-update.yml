@@ -1,0 +1,83 @@
+name: Signed main-branch update
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: signed-main-update
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: grc-frontend/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build dependencies
+        run: |
+          cd grc-frontend
+          npm ci
+          python -m pip install cryptography
+
+      - name: Build signed update package
+        env:
+          UPDATE_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Configure the UPDATE_SIGNING_PRIVATE_KEY Actions secret with the PEM private key matching grc-backend/configs/update_pub.pem."
+            exit 1
+          fi
+          export UPDATE_COMMIT=$(git rev-parse HEAD)
+          printf '%s\n' "$UPDATE_SIGNING_PRIVATE_KEY" > grc-backend/configs/vendor_private.pem
+          chmod 600 grc-backend/configs/vendor_private.pem
+          printf '5\n' | ./build-update.sh
+
+      - name: Publish signed update for this main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit=$(git -C "$GITHUB_WORKSPACE" rev-parse HEAD)
+          current_main=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$commit" != "$current_main" ]; then
+            echo "main advanced while the package was building; skipping this stale package."
+            exit 0
+          fi
+
+          tag="main-$commit"
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" update-EdgeGRC.zip --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" update-EdgeGRC.zip \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "Main update ${commit:0:7}" \
+              --notes "Signed Edge-GRC update package built from main commit $commit."
+          fi
+
+          old_tags=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            --jq '[.[] | select(.tagName | startswith("main-")) | .tagName] | .[10:][]')
+          if [ -n "$old_tags" ]; then
+            while IFS= read -r old_tag; do
+              gh release delete "$old_tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+            done <<< "$old_tags"
+          fi

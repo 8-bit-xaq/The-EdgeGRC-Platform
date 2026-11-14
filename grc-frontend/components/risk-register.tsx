@@ -49,6 +49,24 @@ interface RiskRegisterProps {
   onTargetRiskHandled?: () => void
 }
 
+function expandCrossWalkedControlIds(controlIds: string[], controls: ComplianceControl[]) {
+  const controlsById = new Map(controls.map((control) => [control.id, control]))
+  const expandedIds = new Set(controlIds)
+  const queue = [...controlIds]
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const control = controlsById.get(queue[index])
+    for (const crossWalkedId of control?.cross_walked_control_ids ?? []) {
+      if (!expandedIds.has(crossWalkedId)) {
+        expandedIds.add(crossWalkedId)
+        queue.push(crossWalkedId)
+      }
+    }
+  }
+
+  return Array.from(expandedIds)
+}
+
 export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegisterProps) {
   const queryClient = useQueryClient()
   const [risks, setRisks] = useState<RiskItem[]>([])
@@ -121,9 +139,12 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
     setAttachmentFile(null)
     setLikelihood(String(risk.inherent_likelihood))
     setImpact(String(risk.inherent_impact))
-    setSelectedControlIds(risk.mitigating_controls_detail?.map((c) => c.control_id || (c as any).id) || [])
+    const mappedControlIds = risk.mitigating_control_ids
+      ?? risk.mitigating_controls_detail?.map((control) => control.control_id || control.id)
+      ?? []
+    setSelectedControlIds(expandCrossWalkedControlIds(mappedControlIds, controls))
     setDialogOpen(true)
-  }, [canManageRisks])
+  }, [canManageRisks, controls])
 
   useEffect(() => {
     if (!targetRiskId || isLoading) return
@@ -218,8 +239,7 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
 
   // SMART CLUSTER SELECTION: Selecting one control selects its cross-walked siblings
   const toggleControlSelection = (cId: string) => {
-    const targetControl = controls.find((c) => c.id === cId)
-    const clusterIds = [cId, ...(targetControl?.cross_walked_control_ids || [])]
+    const clusterIds = expandCrossWalkedControlIds([cId], controls)
 
     setSelectedControlIds((prev) => {
       const isSelected = prev.includes(cId)
@@ -282,6 +302,10 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
               risks.map((risk) => {
                 const inherent = getRiskLevel(risk.inherent_score)
                 const residual = getRiskLevel(risk.residual_score)
+                const mappedControlIds = risk.mitigating_control_ids
+                  ?? risk.mitigating_controls_detail?.map((control) => control.control_id || control.id)
+                  ?? []
+                const compensatingControlIds = expandCrossWalkedControlIds(mappedControlIds, controls)
 
                 return (
                   <TableRow
@@ -304,12 +328,12 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
                       </Badge>
                     </TableCell>
                     <TableCell className="align-top">
-                      {risk.mitigating_controls_detail && risk.mitigating_controls_detail.length > 0 ? (
+                      {compensatingControlIds.length > 0 ? (
                         <div className="flex flex-wrap gap-1.5">
-                          {risk.mitigating_controls_detail.map(ctrl => (
-                            <Badge key={ctrl.control_id} variant="secondary" className="text-[10px] bg-primary/10 text-primary border-primary/20 flex items-center gap-1">
+                          {compensatingControlIds.map((controlId) => (
+                            <Badge key={controlId} variant="secondary" className="text-[10px] bg-primary/10 text-primary border-primary/20 flex items-center gap-1">
                               <ShieldCheck className="size-3" />
-                              {ctrl.control_id}
+                              {controlId}
                             </Badge>
                           ))}
                         </div>
@@ -449,8 +473,9 @@ export function RiskRegister({ targetRiskId, onTargetRiskHandled }: RiskRegister
                             <div className="flex items-center gap-2">
                               <span className="font-mono text-xs font-semibold">{control.id}</span>
                               {hasSiblings && (
-                                <Badge variant="secondary" className="text-[9px] h-4 px-1 flex items-center gap-1 bg-background border-border">
-                                  <Link2 className="size-3" /> Auto-syncs {control.cross_walked_control_ids?.length} siblings
+                                <Badge variant="secondary" className="h-auto max-w-full whitespace-normal px-1 py-0 text-[9px] flex items-center gap-1 bg-background border-border">
+                                  <Link2 className="size-3 shrink-0" />
+                                  Auto-syncs {control.cross_walked_control_ids?.join(", ")}
                                 </Badge>
                               )}
                             </div>

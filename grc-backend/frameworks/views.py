@@ -10,6 +10,8 @@ Orchestrates all appliance HTTP endpoints including:
 """
 
 from django.middleware.csrf import get_token
+from django.core import signing
+from django.db import transaction
 from rest_framework import generics, views, status
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -38,6 +40,9 @@ from rest_framework.throttling import ScopedRateThrottle
 # ----------------------------------------------
 
 import datetime
+import hashlib
+import logging
+import re
 from cryptography.hazmat.primitives import serialization, hashes
 from cryptography.hazmat.primitives.asymmetric import rsa
 
@@ -51,6 +56,7 @@ from cryptography.x509.oid import NameOID
 import io
 import os
 import ipaddress
+import stat
 import zipfile
 import json
 import base64
@@ -60,6 +66,9 @@ import threading
 import shutil
 import sqlite3
 import tempfile
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 from .services.pdf_generator import generate_audit_pdf
 from .log_sanitizer import sanitize_log_line
@@ -77,6 +86,295 @@ from .permissions import (
     control_is_submitted_for_audit,
     get_user_role,
 )
+
+GITHUB_REPOSITORY = "8-bit-xaq/The-EdgeGRC-Platform"
+GITHUB_API_ROOT = f"https://api.github.com/repos/{GITHUB_REPOSITORY}"
+UPDATE_PACKAGE_NAME = "update-EdgeGRC.zip"
+MAX_UPDATE_PACKAGE_SIZE = 500 * 1024 * 1024
+MAX_UPDATE_EXPANDED_SIZE = 2 * 1024 * 1024 * 1024
+MAX_FRAMEWORK_FILE_SIZE = 10 * 1024 * 1024
+logger = logging.getLogger(__name__)
+
+
+class GitHubUpdateError(Exception):
+    def __init__(self, message, status_code=status.HTTP_502_BAD_GATEWAY):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class UpdatePackageError(Exception):
+    def __init__(self, message, status_code=status.HTTP_400_BAD_REQUEST):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _framework_library_directory():
+    return os.path.join(str(settings.BASE_DIR.parent), "Frameworks")
+
+
+def _load_framework_library_file(framework_id):
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", framework_id):
+        raise FileNotFoundError
+
+    directory = os.path.realpath(_framework_library_directory())
+    file_path = os.path.join(directory, f"{framework_id}.json")
+    if os.path.dirname(os.path.realpath(file_path)) != directory or os.path.islink(file_path):
+        raise FileNotFoundError
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError
+
+    file_size = os.path.getsize(file_path)
+    if file_size > MAX_FRAMEWORK_FILE_SIZE:
+        raise ValueError("Framework files must be 10 MB or smaller.")
+    with open(file_path, encoding="utf-8") as framework_file:
+        definition = json.load(framework_file)
+    if not isinstance(definition, (dict, list)):
+        raise ValueError("Framework JSON must contain an object or array.")
+    return definition
+
+
+def _github_json(url):
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "Edge-GRC-Platform-Updater",
+        },
+    )
+    try:
+        with urlopen(request, timeout=20) as response:
+            return json.load(response)
+    except HTTPError as exc:
+        if exc.code == 404:
+            raise GitHubUpdateError("The requested GitHub update resource was not found.", 404) from exc
+        raise GitHubUpdateError(
+            f"GitHub could not be reached for update information (HTTP {exc.code})."
+        ) from exc
+    except URLError as exc:
+        raise GitHubUpdateError("Could not connect to GitHub to check for updates.") from exc
+    except (json.JSONDecodeError, OSError) as exc:
+        raise GitHubUpdateError("GitHub returned an invalid update response.") from exc
+
+
+def _get_main_commit():
+    commit_data = _github_json(f"{GITHUB_API_ROOT}/commits/main")
+    commit = commit_data.get("sha") if isinstance(commit_data, dict) else None
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
+        raise GitHubUpdateError("GitHub returned an invalid main-branch commit.")
+    return commit.lower()
+
+
+def _get_main_update_asset(commit):
+    tag = f"main-{commit}"
+    try:
+        release = _github_json(f"{GITHUB_API_ROOT}/releases/tags/{tag}")
+    except GitHubUpdateError as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+
+    if not isinstance(release, dict) or release.get("tag_name") != tag:
+        return None
+    assets = release.get("assets", [])
+    if not isinstance(assets, list):
+        return None
+    for asset in assets:
+        if not isinstance(asset, dict) or asset.get("name") != UPDATE_PACKAGE_NAME:
+            continue
+        download_url = asset.get("browser_download_url")
+        parsed_url = urlparse(download_url or "")
+        if (
+            parsed_url.scheme == "https"
+            and parsed_url.hostname == "github.com"
+            and isinstance(asset.get("size"), int)
+            and 0 < asset["size"] <= MAX_UPDATE_PACKAGE_SIZE
+        ):
+            return download_url
+    return None
+
+
+def _get_installed_commit():
+    version_path = os.path.join(
+        str(settings.BASE_DIR.parent), "grc-frontend", "public", "version.json"
+    )
+    try:
+        with open(version_path, encoding="utf-8") as version_file:
+            version_data = json.load(version_file)
+    except (OSError, json.JSONDecodeError):
+        return None
+    commit = version_data.get("commit") if isinstance(version_data, dict) else None
+    if isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40,64}", commit):
+        return commit.lower()
+    return None
+
+
+def _download_main_update(download_url, update_dir):
+    request = Request(download_url, headers={"User-Agent": "Edge-GRC-Platform-Updater"})
+    fd, zip_path = tempfile.mkstemp(prefix="main-update-", suffix=".zip", dir=update_dir)
+    completed = False
+    try:
+        with os.fdopen(fd, "wb") as package_file, urlopen(request, timeout=30) as response:
+            content_length = response.headers.get("Content-Length")
+            if content_length and int(content_length) > MAX_UPDATE_PACKAGE_SIZE:
+                raise GitHubUpdateError("The signed update package exceeds the 500 MB size limit.", 413)
+            total_size = 0
+            while True:
+                chunk = response.read(65536)
+                if not chunk:
+                    break
+                total_size += len(chunk)
+                if total_size > MAX_UPDATE_PACKAGE_SIZE:
+                    raise GitHubUpdateError("The signed update package exceeds the 500 MB size limit.", 413)
+                package_file.write(chunk)
+        if total_size == 0:
+            raise GitHubUpdateError("GitHub returned an empty update package.")
+        completed = True
+        return zip_path
+    except GitHubUpdateError:
+        raise
+    except HTTPError as exc:
+        raise GitHubUpdateError(
+            f"GitHub could not download the update package (HTTP {exc.code})."
+        ) from exc
+    except URLError as exc:
+        raise GitHubUpdateError("Could not download the signed update package from GitHub.") from exc
+    except (OSError, ValueError) as exc:
+        raise GitHubUpdateError("The signed update package could not be downloaded.") from exc
+    finally:
+        if not completed and os.path.exists(zip_path):
+            os.remove(zip_path)
+
+
+def _verify_and_start_update(zip_path, expected_commit=None):
+    update_dir = os.path.dirname(zip_path)
+    pub_key_path = os.path.join(settings.BASE_DIR, "configs", "update_pub.pem")
+    if not os.path.exists(pub_key_path):
+        raise UpdatePackageError(
+            "Update public key not found. System cannot verify updates.",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    try:
+        with open(pub_key_path, "rb") as key_file:
+            public_key = load_pem_public_key(key_file.read())
+    except (OSError, ValueError) as exc:
+        raise UpdatePackageError(
+            "Update public key is invalid. System cannot verify updates.",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+        ) from exc
+
+    payload_fd, payload_path = tempfile.mkstemp(prefix="verified-update-", suffix=".zip", dir=update_dir)
+    os.close(payload_fd)
+    update_started = False
+    try:
+        try:
+            from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
+
+            with zipfile.ZipFile(zip_path, "r") as outer_zip:
+                outer_members = outer_zip.infolist()
+                outer_names = [member.filename for member in outer_members]
+                if (
+                    len(outer_names) != len(set(outer_names))
+                    or set(outer_names) != {"payload.zip", "signature.sig"}
+                ):
+                    raise UpdatePackageError(
+                        "Invalid update package format. Must contain only payload.zip and signature.sig."
+                    )
+                members_by_name = {member.filename: member for member in outer_members}
+                if (
+                    members_by_name["payload.zip"].file_size > MAX_UPDATE_PACKAGE_SIZE
+                    or members_by_name["signature.sig"].file_size > 8192
+                    or any(member.flag_bits & 0x1 for member in outer_members)
+                ):
+                    raise UpdatePackageError("Update package contains an oversized or encrypted entry.", 413)
+                with outer_zip.open("signature.sig") as signature_file:
+                    signature = signature_file.read()
+
+                hasher = hashes.Hash(hashes.SHA256())
+                with outer_zip.open("payload.zip") as payload_file, open(payload_path, "wb") as staged_payload:
+                    while True:
+                        chunk = payload_file.read(65536)
+                        if not chunk:
+                            break
+                        hasher.update(chunk)
+                        staged_payload.write(chunk)
+
+                public_key.verify(
+                    signature,
+                    hasher.finalize(),
+                    padding.PKCS1v15(),
+                    asym_utils.Prehashed(hashes.SHA256()),
+                )
+            if expected_commit:
+                try:
+                    with zipfile.ZipFile(payload_path, "r") as payload_zip:
+                        with payload_zip.open("grc-frontend/public/version.json") as version_file:
+                            version_data = json.load(version_file)
+                except (KeyError, OSError, zipfile.BadZipFile, json.JSONDecodeError) as exc:
+                    raise UpdatePackageError(
+                        "The signed package does not contain valid main-branch version metadata.",
+                        status.HTTP_403_FORBIDDEN,
+                    ) from exc
+                if not isinstance(version_data, dict) or version_data.get("commit") != expected_commit:
+                    raise UpdatePackageError(
+                        "The signed package does not match the checked main-branch commit.",
+                        status.HTTP_403_FORBIDDEN,
+                    )
+            with zipfile.ZipFile(payload_path, "r") as payload_zip:
+                payload_members = payload_zip.infolist()
+                member_names = [member.filename for member in payload_members]
+                if len(member_names) != len(set(member_names)):
+                    raise UpdatePackageError("The update payload contains duplicate archive paths.")
+                expanded_size = 0
+                for member in payload_members:
+                    name = member.filename
+                    normalized_name = os.path.normpath(name)
+                    if (
+                        not name
+                        or "\\" in name
+                        or any(part in {".", ".."} for part in name.split("/"))
+                        or os.path.isabs(name)
+                        or normalized_name == ".."
+                        or normalized_name.startswith(".." + os.path.sep)
+                        or (len(name) > 1 and name[1] == ":")
+                    ):
+                        raise UpdatePackageError("The update payload contains an unsafe archive path.")
+                    if stat.S_ISLNK(member.external_attr >> 16):
+                        raise UpdatePackageError("The update payload must not contain symbolic links.")
+                    if not member.is_dir():
+                        expanded_size += member.file_size
+                        if expanded_size > MAX_UPDATE_EXPANDED_SIZE:
+                            raise UpdatePackageError(
+                                "The expanded update payload exceeds the 2 GB limit.",
+                                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            )
+        except InvalidSignature as exc:
+            raise UpdatePackageError(
+                "Signature verification failed! The update is not trusted.",
+                status.HTTP_403_FORBIDDEN,
+            ) from exc
+        except zipfile.BadZipFile as exc:
+            raise UpdatePackageError("Uploaded file is not a valid ZIP archive.") from exc
+        except UpdatePackageError:
+            raise
+        except Exception as exc:
+            raise UpdatePackageError(f"Error parsing update package: {str(exc)}") from exc
+
+        appliance_root = str(settings.BASE_DIR.parent)
+        try:
+            threading.Thread(
+                target=execute_system_update, args=(payload_path, appliance_root)
+            ).start()
+        except (OSError, RuntimeError) as exc:
+            raise UpdatePackageError(
+                "Could not start the verified system update.",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+            ) from exc
+        update_started = True
+    finally:
+        if not update_started and os.path.exists(payload_path):
+            os.remove(payload_path)
+
 
 class TestPlanRetrieveUpdateView(generics.RetrieveUpdateAPIView):
     """Retrieves or updates audit testing plans, expectations, and attachments for a control."""
@@ -173,6 +471,251 @@ class ControlDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = ControlSerializer
     lookup_field = 'control_id'
     permission_classes = [IsAuthenticated, ControlMatrixPermissions]
+
+
+class FrameworkRemovalView(APIView):
+    """Checks framework control work and requires a signed confirmation before deleting it."""
+    permission_classes = [IsAuthenticated, IsAdminUserOrReadOnly]
+    confirmation_salt = "framework-removal-confirmation"
+    confirmation_max_age = 300
+    work_types = ("evaluation", "evidence", "audit", "remediation", "risk")
+
+    @staticmethod
+    def _work_snapshot(controls):
+        summary = {work_type: 0 for work_type in FrameworkRemovalView.work_types}
+        affected_controls = []
+        snapshot = []
+        file_refs = []
+
+        for control in controls:
+            proofs = list(control.proofs.all())
+            tasks = list(control.remediation_tasks.all())
+            assessments = list(control.assessments.all())
+            risks = list(control.mitigated_risks.all())
+            test_plan = getattr(control, "test_plan", None)
+            work = []
+
+            if (
+                control.status != "Not Evaluated"
+                or control.control_effectiveness != "Not Tested"
+                or control.implementation_effectiveness != "Not Tested"
+            ):
+                work.append("evaluation")
+            if (control.evidence or "").strip() or proofs:
+                work.append("evidence")
+            if (
+                test_plan
+                or assessments
+                or control.testing_frequency != "None"
+                or control.next_audit_date
+            ):
+                work.append("audit")
+            if tasks:
+                work.append("remediation")
+            if risks:
+                work.append("risk")
+
+            if work:
+                affected_controls.append({
+                    "control_id": control.control_id,
+                    "work": work,
+                })
+                for work_type in work:
+                    summary[work_type] += 1
+
+            if test_plan and test_plan.attachment:
+                file_refs.append((test_plan.attachment.storage, test_plan.attachment.name))
+            for proof in proofs:
+                if proof.file:
+                    file_refs.append((proof.file.storage, proof.file.name))
+
+            snapshot.append({
+                "pk": control.pk,
+                "control_id": control.control_id,
+                "status": control.status,
+                "control_effectiveness": control.control_effectiveness,
+                "implementation_effectiveness": control.implementation_effectiveness,
+                "evidence": control.evidence,
+                "testing_frequency": control.testing_frequency,
+                "next_audit_date": control.next_audit_date,
+                "proofs": [(proof.pk, proof.file.name) for proof in proofs],
+                "test_plan": (
+                    (
+                        test_plan.pk,
+                        test_plan.test_methodology,
+                        test_plan.test_steps,
+                        test_plan.expected_evidence,
+                        test_plan.attachment.name,
+                    )
+                    if test_plan
+                    else None
+                ),
+                "assessments": [
+                    (
+                        item.pk,
+                        item.status,
+                        item.design_effectiveness,
+                        item.operating_effectiveness,
+                        item.auditor_notes,
+                        item.date_started,
+                        item.date_completed,
+                    )
+                    for item in assessments
+                ],
+                "remediation_tasks": [
+                    (
+                        task.pk,
+                        task.title,
+                        task.description,
+                        task.status,
+                        task.assigned_to_id,
+                        task.requested_by_id,
+                        task.due_date,
+                        task.updated_at,
+                    )
+                    for task in tasks
+                ],
+                "risks": [(risk.pk, risk.risk_id) for risk in risks],
+            })
+
+        snapshot_json = json.dumps(snapshot, sort_keys=True, default=str, separators=(",", ":"))
+        fingerprint = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+        return summary, affected_controls, fingerprint, file_refs
+
+    @staticmethod
+    def _delete_files(file_refs, cleanup_failures, framework):
+        for storage, name in file_refs:
+            try:
+                storage.delete(name)
+            except OSError:
+                logger.exception(
+                    "Could not delete an uploaded file after removing framework %r.",
+                    framework,
+                )
+                cleanup_failures.append(name)
+
+    def post(self, request):
+        framework = request.data.get("framework")
+        if not isinstance(framework, str) or not framework.strip() or len(framework) > 100:
+            return Response(
+                {"error": "A framework name of 1 to 100 characters is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        framework = framework.strip()
+        confirmation_token = request.data.get("confirmation_token")
+        if confirmation_token is not None and not isinstance(confirmation_token, str):
+            return Response(
+                {"error": "The framework removal confirmation is invalid."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        cleanup_failures = []
+        with transaction.atomic():
+            control_ids = list(
+                Control.objects.select_for_update()
+                .filter(framework=framework)
+                .values_list("pk", flat=True)
+            )
+            if not control_ids:
+                return Response(
+                    {"error": "This framework has no controls to remove."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            controls = list(
+                Control.objects.filter(pk__in=control_ids)
+                .select_related("test_plan")
+                .prefetch_related("proofs", "remediation_tasks", "assessments", "mitigated_risks")
+                .order_by("control_id")
+            )
+            summary, affected_controls, fingerprint, file_refs = self._work_snapshot(controls)
+            has_work = any(summary.values())
+
+            token_payload = None
+            token_error = False
+            if confirmation_token:
+                try:
+                    token_payload = signing.loads(
+                        confirmation_token,
+                        salt=self.confirmation_salt,
+                        max_age=self.confirmation_max_age,
+                    )
+                except signing.BadSignature:
+                    token_error = True
+
+            if confirmation_token and (
+                token_error
+                or not isinstance(token_payload, dict)
+                or token_payload.get("framework") != framework
+                or token_payload.get("fingerprint") != fingerprint
+            ):
+                replacement_token = signing.dumps(
+                    {"framework": framework, "fingerprint": fingerprint},
+                    salt=self.confirmation_salt,
+                )
+                return Response(
+                    {
+                        "error": "Framework controls changed since they were reviewed. Check the current work before confirming removal.",
+                        "framework": framework,
+                        "has_work": has_work,
+                        "work_summary": summary,
+                        "affected_control_count": len(affected_controls),
+                        "affected_controls": affected_controls[:50],
+                        "controls_truncated": len(affected_controls) > 50,
+                        "confirmation_token": replacement_token,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            if has_work and not confirmation_token:
+                confirmation_token = signing.dumps(
+                    {"framework": framework, "fingerprint": fingerprint},
+                    salt=self.confirmation_salt,
+                )
+                return Response(
+                    {
+                        "error": "Work exists on controls in this framework.",
+                        "framework": framework,
+                        "has_work": True,
+                        "work_summary": summary,
+                        "affected_control_count": len(affected_controls),
+                        "affected_controls": affected_controls[:50],
+                        "controls_truncated": len(affected_controls) > 50,
+                        "confirmation_token": confirmation_token,
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            if has_work:
+                username = request.data.get("username")
+                password = request.data.get("password")
+                if not isinstance(username, str) or not username.strip() or not isinstance(password, str) or not password:
+                    return Response(
+                        {"error": "Your administrator username and password are required to remove a framework with recorded work."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if username != request.user.get_username() or not request.user.check_password(password):
+                    return Response(
+                        {"error": "The administrator credentials could not be verified."},
+                        status=status.HTTP_403_FORBIDDEN,
+                    )
+
+            Control.objects.filter(pk__in=control_ids).delete()
+            transaction.on_commit(
+                lambda: self._delete_files(file_refs, cleanup_failures, framework)
+            )
+
+        response_data = {
+            "message": f"Framework {framework} and its controls were removed.",
+            "deleted_controls": len(control_ids),
+        }
+        if cleanup_failures:
+            response_data["warning"] = (
+                "The framework was removed, but some attached files could not be deleted. "
+                "Check the backend logs for details."
+            )
+            response_data["failed_file_cleanup_count"] = len(cleanup_failures)
+        return Response(response_data)
 
 
 class ProofUploadView(views.APIView):
@@ -903,82 +1446,133 @@ class SystemUpdateView(APIView):
     parser_classes = (MultiPartParser, FormParser)
 
     def post(self, request):
-        if getattr(request.user.profile, 'role', '') != 'Admin':
+        if get_user_role(request) != 'Admin':
             return Response({"error": "Only Administrators can perform system updates."}, status=status.HTTP_403_FORBIDDEN)
         
         file_obj = request.FILES.get('file')
         if not file_obj or not file_obj.name.endswith('.zip'):
             return Response({"error": "Please provide a valid .zip update package."}, status=status.HTTP_400_BAD_REQUEST)
 
+        update_dir = os.path.join(settings.BASE_DIR, 'updates')
+        os.makedirs(update_dir, exist_ok=True)
+        file_descriptor, zip_path = tempfile.mkstemp(prefix="uploaded-update-", suffix=".zip", dir=update_dir)
         try:
+            total_size = 0
+            with os.fdopen(file_descriptor, 'wb') as dest:
+                for chunk in file_obj.chunks():
+                    total_size += len(chunk)
+                    if total_size > MAX_UPDATE_PACKAGE_SIZE:
+                        raise UpdatePackageError(
+                            "The update package exceeds the 500 MB size limit.",
+                            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        )
+                    dest.write(chunk)
+            _verify_and_start_update(zip_path)
+        except UpdatePackageError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+        except OSError as exc:
+            return Response({"error": f"Failed to stage update: {str(exc)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        finally:
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+
+        return Response(
+            {"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."},
+            status=status.HTTP_200_OK,
+        )
+
+
+class MainBranchUpdateView(APIView):
+    """Checks for and installs the signed update package for the latest GitHub main commit."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if get_user_role(request) != 'Admin':
+            return Response({"error": "Only Administrators can check for system updates."}, status=status.HTTP_403_FORBIDDEN)
+
+        try:
+            commit = _get_main_commit()
+            installed_commit = _get_installed_commit()
+            if installed_commit == commit:
+                return Response({
+                    "available": False,
+                    "up_to_date": True,
+                    "commit": commit,
+                    "installed_commit": installed_commit,
+                    "message": "The appliance is already running the latest main-branch commit.",
+                })
+
+            asset_url = _get_main_update_asset(commit)
+            if not asset_url:
+                return Response({
+                    "available": False,
+                    "up_to_date": False,
+                    "commit": commit,
+                    "installed_commit": installed_commit,
+                    "message": "A signed update package has not been published for the latest main commit yet.",
+                })
+
+            return Response({
+                "available": True,
+                "up_to_date": False,
+                "commit": commit,
+                "installed_commit": installed_commit,
+                "message": "A signed update package is available for the latest main commit.",
+            })
+        except GitHubUpdateError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+
+    def post(self, request):
+        if get_user_role(request) != 'Admin':
+            return Response({"error": "Only Administrators can install system updates."}, status=status.HTTP_403_FORBIDDEN)
+        if request.data.get("confirm_backup") is not True:
+            return Response(
+                {"error": "Confirm that you have created a current system backup before installing an update."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        expected_commit = request.data.get("expected_commit")
+        if not isinstance(expected_commit, str) or not re.fullmatch(r"[0-9a-fA-F]{40,64}", expected_commit):
+            return Response({"error": "Check for updates again before installing."}, status=status.HTTP_400_BAD_REQUEST)
+
+        zip_path = None
+        try:
+            commit = _get_main_commit()
+            if commit != expected_commit.lower():
+                return Response(
+                    {"error": "The main branch changed since the update check. Check for updates again before installing."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if _get_installed_commit() == commit:
+                return Response({"error": "The appliance is already up to date."}, status=status.HTTP_409_CONFLICT)
+            asset_url = _get_main_update_asset(commit)
+            if not asset_url:
+                return Response(
+                    {"error": "A signed update package has not been published for the latest main commit yet."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
             update_dir = os.path.join(settings.BASE_DIR, 'updates')
             os.makedirs(update_dir, exist_ok=True)
-            zip_path = os.path.join(update_dir, 'latest_update.zip')
-            
-            with open(zip_path, 'wb+') as dest:
-                for chunk in file_obj.chunks():
-                    dest.write(chunk)
-            
-            # --- Cryptographic Signature Verification ---
-            pub_key_path = os.path.join(settings.BASE_DIR, 'configs', 'update_pub.pem')
-            if not os.path.exists(pub_key_path):
-                # If key doesn't exist yet, we fail closed to prevent unsigned updates
-                return Response({"error": "Update public key not found. System cannot verify updates."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            zip_path = _download_main_update(asset_url, update_dir)
+            if _get_main_commit() != commit:
+                return Response(
+                    {"error": "The main branch advanced while the package was downloading. Check for updates again."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            _verify_and_start_update(zip_path, expected_commit=commit)
+        except GitHubUpdateError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+        except UpdatePackageError as exc:
+            return Response({"error": str(exc)}, status=exc.status_code)
+        finally:
+            if zip_path and os.path.exists(zip_path):
+                os.remove(zip_path)
 
-            with open(pub_key_path, 'rb') as f:
-                public_key = load_pem_public_key(f.read())
-            
-            payload_path = os.path.join(update_dir, 'payload.zip')
-            try:
-                from cryptography.hazmat.primitives.asymmetric import utils as asym_utils
-                with zipfile.ZipFile(zip_path, 'r') as outer_zip:
-                    if 'payload.zip' not in outer_zip.namelist() or 'signature.sig' not in outer_zip.namelist():
-                        return Response({"error": "Invalid update package format. Must contain payload.zip and signature.sig."}, status=status.HTTP_400_BAD_REQUEST)
-                    
-                    with outer_zip.open('signature.sig') as sig_f:
-                        signature = sig_f.read()
-                        
-                    # Stream payload.zip in 64KB chunks to disk while computing SHA-256 digest
-                    # to avoid loading up to 500MB into memory at once.
-                    hasher = hashes.Hash(hashes.SHA256())
-                    with outer_zip.open('payload.zip') as payload_f, open(payload_path, 'wb') as out_f:
-                        while True:
-                            chunk = payload_f.read(65536)
-                            if not chunk:
-                                break
-                            hasher.update(chunk)
-                            out_f.write(chunk)
-                    digest = hasher.finalize()
-                        
-                    # Verify RSA signature against the prehashed SHA-256 digest
-                    public_key.verify(
-                        signature,
-                        digest,
-                        padding.PKCS1v15(),
-                        asym_utils.Prehashed(hashes.SHA256())
-                    )
-                        
-            except InvalidSignature:
-                if os.path.exists(payload_path):
-                    os.remove(payload_path)
-                return Response({"error": "Signature verification failed! The update is not trusted."}, status=status.HTTP_403_FORBIDDEN)
-            except zipfile.BadZipFile:
-                if os.path.exists(payload_path):
-                    os.remove(payload_path)
-                return Response({"error": "Uploaded file is not a valid ZIP archive."}, status=status.HTTP_400_BAD_REQUEST)
-            except Exception as e:
-                if os.path.exists(payload_path):
-                    os.remove(payload_path)
-                return Response({"error": f"Error parsing update package: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            # Execute with the VERIFIED payload path against the appliance root directory
-            appliance_root = str(settings.BASE_DIR.parent)
-            threading.Thread(target=execute_system_update, args=(payload_path, appliance_root)).start()
-            
-            return Response({"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."}, status=status.HTTP_200_OK)
-            
-        except Exception as e:
-            return Response({"error": f"Failed to stage update: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response(
+            {"status": "Signature verified. Update initiated. The system will apply changes and restart automatically."},
+            status=status.HTTP_200_OK,
+        )
 
 
 class FactoryResetView(APIView):
@@ -1604,6 +2198,91 @@ class BulkControlImportView(APIView):
 
         except Exception as e:
             return Response({"error": f"Failed to import controls: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class FrameworkLibraryView(APIView):
+    """Lists JSON frameworks bundled in the appliance Frameworks directory."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if get_user_role(request) != "Admin":
+            return Response({"error": "Only Administrators can access the framework library."}, status=status.HTTP_403_FORBIDDEN)
+
+        directory = _framework_library_directory()
+        if not os.path.isdir(directory):
+            return Response({"frameworks": []})
+
+        frameworks = []
+        try:
+            filenames = sorted(os.listdir(directory))
+            for filename in filenames:
+                if not filename.lower().endswith(".json"):
+                    continue
+                framework_id = filename[:-5]
+                try:
+                    definition = _load_framework_library_file(framework_id)
+                except FileNotFoundError:
+                    continue
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    return Response(
+                        {"error": f"Could not read bundled framework {filename}: {exc}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+
+                if isinstance(definition, dict):
+                    name = (
+                        definition.get("framework")
+                        or definition.get("framework_name")
+                        or definition.get("title")
+                        or definition.get("name")
+                        or framework_id.replace("-", " ").replace("_", " ")
+                    )
+                    description = definition.get("description", "")
+                    items = next(
+                        (
+                            definition[key]
+                            for key in ("controls", "requirements", "items", "policies")
+                            if isinstance(definition.get(key), list)
+                        ),
+                        [],
+                    )
+                else:
+                    name = framework_id.replace("-", " ").replace("_", " ")
+                    description = ""
+                    items = definition
+
+                frameworks.append({
+                    "id": framework_id,
+                    "name": str(name),
+                    "description": str(description),
+                    "item_count": len(items),
+                })
+        except OSError as exc:
+            return Response(
+                {"error": f"Could not read the bundled framework library: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response({"frameworks": frameworks})
+
+
+class FrameworkLibraryFileView(APIView):
+    """Returns one bundled JSON framework by its safe filename identifier."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, framework_id):
+        if get_user_role(request) != "Admin":
+            return Response({"error": "Only Administrators can access the framework library."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            definition = _load_framework_library_file(framework_id)
+        except FileNotFoundError:
+            return Response({"error": "Bundled framework not found."}, status=status.HTTP_404_NOT_FOUND)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            return Response(
+                {"error": f"Could not read bundled framework: {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(definition)
 
 
 class HealthCheckView(APIView):

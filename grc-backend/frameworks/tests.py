@@ -6,16 +6,29 @@ from pathlib import Path
 from rest_framework import serializers
 from rest_framework.test import APIRequestFactory, force_authenticate
 from unittest.mock import Mock, patch
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa, utils as asym_utils
 import io
+import json
 import sqlite3
 import tempfile
 import zipfile
 from types import SimpleNamespace
 
-from .models import AssessmentActivity, Control, RemediationTask, validate_secure_upload
+from .models import AssessmentActivity, Control, RemediationTask, Risk, TestPlan, validate_secure_upload
 from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
-from .views import DeviceLogView
+from .views import (
+    AssessmentActivityDetailView,
+    DeviceLogView,
+    FrameworkLibraryFileView,
+    FrameworkLibraryView,
+    FrameworkRemovalView,
+    MainBranchUpdateView,
+    UpdatePackageError,
+    _verify_and_start_update,
+    execute_system_update,
+)
 from .database_backup import add_database_backup
 from .permissions import (
     AssessmentPermissions,
@@ -209,6 +222,369 @@ class DeviceLogViewTests(TestCase):
         self.assertIn("peer=[REDACTED_IP]", sanitized)
 
 
+class FrameworkLibraryViewTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username="framework-library-admin")
+        self.admin.profile.role = "Admin"
+        self.admin.profile.save()
+        self.auditor = User.objects.create_user(username="framework-library-auditor")
+        self.auditor.profile.role = "Auditor"
+        self.auditor.profile.save()
+        self.factory = APIRequestFactory()
+
+    def make_request(self, view, user, path, framework_id=None):
+        request = self.factory.get(path)
+        force_authenticate(request, user=user)
+        if framework_id is None:
+            return view.as_view()(request)
+        return view.as_view()(request, framework_id=framework_id)
+
+    def test_admin_lists_bundled_framework_metadata(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_root = Path(temp_dir) / "appliance"
+            library = app_root / "Frameworks"
+            library.mkdir(parents=True)
+            (library / "pci-dss.json").write_text(
+                json.dumps({
+                    "framework": "PCI DSS v4",
+                    "description": "Payment card security",
+                    "controls": [{"id": "1.1"}, {"id": "1.2"}],
+                }),
+                encoding="utf-8",
+            )
+            (library / "notes.txt").write_text("not a framework", encoding="utf-8")
+            with patch("frameworks.views.settings.BASE_DIR", app_root / "grc-backend"):
+                response = self.make_request(
+                    FrameworkLibraryView,
+                    self.admin,
+                    "/api/framework-library/",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["frameworks"],
+            [{
+                "id": "pci-dss",
+                "name": "PCI DSS v4",
+                "description": "Payment card security",
+                "item_count": 2,
+            }],
+        )
+
+    def test_admin_can_load_framework_file_for_import(self):
+        definition = {"framework": "PCI DSS", "controls": [{"id": "1.1"}]}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_root = Path(temp_dir) / "appliance"
+            library = app_root / "Frameworks"
+            library.mkdir(parents=True)
+            (library / "pci-dss.json").write_text(json.dumps(definition), encoding="utf-8")
+            with patch("frameworks.views.settings.BASE_DIR", app_root / "grc-backend"):
+                response = self.make_request(
+                    FrameworkLibraryFileView,
+                    self.admin,
+                    "/api/framework-library/pci-dss/",
+                    "pci-dss",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, definition)
+
+    def test_non_admin_cannot_access_framework_library(self):
+        response = self.make_request(
+            FrameworkLibraryView,
+            self.auditor,
+            "/api/framework-library/",
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_missing_library_returns_empty_list(self):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "frameworks.views.settings.BASE_DIR", Path(temp_dir) / "grc-backend"
+        ):
+            response = self.make_request(
+                FrameworkLibraryView,
+                self.admin,
+                "/api/framework-library/",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["frameworks"], [])
+
+    def test_framework_id_cannot_traverse_outside_library(self):
+        response = self.make_request(
+            FrameworkLibraryFileView,
+            self.admin,
+            "/api/framework-library/..%2Fsecret/",
+            "../secret",
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+
+class MainBranchUpdateViewTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username="main-update-admin")
+        self.admin.profile.role = "Admin"
+        self.admin.profile.save()
+        self.auditor = User.objects.create_user(username="main-update-auditor")
+        self.auditor.profile.role = "Auditor"
+        self.auditor.profile.save()
+        self.factory = APIRequestFactory()
+        self.commit = "a" * 40
+
+    def make_request(self, method, user, data=None):
+        if method == "get":
+            request = self.factory.get("/api/update/main/")
+        else:
+            request = self.factory.post("/api/update/main/", data, format="json")
+        force_authenticate(request, user=user)
+        return MainBranchUpdateView.as_view()(request)
+
+    @patch("frameworks.views._get_main_update_asset", return_value="https://github.com/download")
+    @patch("frameworks.views._get_installed_commit", return_value=None)
+    @patch("frameworks.views._get_main_commit")
+    def test_admin_check_reports_signed_update_for_latest_main_commit(
+        self, get_main_commit, _get_installed_commit, _get_asset
+    ):
+        get_main_commit.return_value = self.commit
+
+        response = self.make_request("get", self.admin)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["available"])
+        self.assertEqual(response.data["commit"], self.commit)
+
+    @patch("frameworks.views._get_main_commit")
+    def test_non_admin_cannot_check_for_updates(self, get_main_commit):
+        response = self.make_request("get", self.auditor)
+
+        self.assertEqual(response.status_code, 403)
+        get_main_commit.assert_not_called()
+
+    @patch("frameworks.views._get_main_commit")
+    def test_install_requires_explicit_backup_confirmation(self, get_main_commit):
+        response = self.make_request(
+            "post",
+            self.admin,
+            {"confirm_backup": False, "expected_commit": self.commit},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        get_main_commit.assert_not_called()
+
+    @patch("frameworks.views._get_main_commit", return_value="b" * 40)
+    def test_install_rejects_main_commit_changed_since_check(self, get_main_commit):
+        response = self.make_request(
+            "post",
+            self.admin,
+            {"confirm_backup": True, "expected_commit": self.commit},
+        )
+
+        self.assertEqual(response.status_code, 409)
+        get_main_commit.assert_called_once()
+
+    @patch("frameworks.views._verify_and_start_update")
+    @patch("frameworks.views._download_main_update", return_value="/tmp/main-update.zip")
+    @patch("frameworks.views._get_main_update_asset", return_value="https://github.com/download")
+    @patch("frameworks.views._get_installed_commit", return_value=None)
+    @patch("frameworks.views._get_main_commit")
+    def test_confirmed_install_downloads_and_verifies_signed_package(
+        self,
+        get_main_commit,
+        _get_installed_commit,
+        _get_asset,
+        download_update,
+        verify_update,
+    ):
+        get_main_commit.return_value = self.commit
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "frameworks.views.settings.BASE_DIR", Path(temp_dir) / "grc-backend"
+        ):
+            response = self.make_request(
+                "post",
+                self.admin,
+                {"confirm_backup": True, "expected_commit": self.commit},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        download_update.assert_called_once()
+        verify_update.assert_called_once_with(
+            "/tmp/main-update.zip",
+            expected_commit=self.commit,
+        )
+
+
+class SignedUpdateVerificationTests(SimpleTestCase):
+    def create_signed_package(
+        self, root, payload_bytes=b"trusted payload", signed_payload=None, extra_entries=()
+    ):
+        config_dir = root / "configs"
+        config_dir.mkdir()
+        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+        public_key = private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        (config_dir / "update_pub.pem").write_bytes(public_key)
+
+        payload_digest = hashes.Hash(hashes.SHA256())
+        payload_digest.update(signed_payload if signed_payload is not None else payload_bytes)
+        signature = private_key.sign(
+            payload_digest.finalize(),
+            padding.PKCS1v15(),
+            asym_utils.Prehashed(hashes.SHA256()),
+        )
+        package_path = root / "update.zip"
+        with zipfile.ZipFile(package_path, "w") as archive:
+            archive.writestr("payload.zip", payload_bytes)
+            archive.writestr("signature.sig", signature)
+            for name, content in extra_entries:
+                archive.writestr(name, content)
+        return package_path
+
+    @staticmethod
+    def make_main_payload(commit, extra_entries=()):
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w") as archive:
+            archive.writestr(
+                "grc-frontend/public/version.json",
+                f'{{"version":"1.0.0","commit":"{commit}"}}',
+            )
+            for name, content in extra_entries:
+                archive.writestr(name, content)
+        return payload.getvalue()
+
+    def test_valid_signature_and_commit_schedules_verified_main_update(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            commit = "c" * 40
+            payload_bytes = self.make_main_payload(commit)
+            package_path = self.create_signed_package(root, payload_bytes=payload_bytes)
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                _verify_and_start_update(str(package_path), expected_commit=commit)
+
+            thread.assert_called_once()
+            self.assertIs(thread.call_args.kwargs["target"], execute_system_update)
+            self.assertEqual(thread.call_args.kwargs["args"][1], str(root.parent))
+            thread.return_value.start.assert_called_once()
+            verified_payload = Path(thread.call_args.kwargs["args"][0])
+            self.assertEqual(verified_payload.read_bytes(), payload_bytes)
+            verified_payload.unlink()
+
+    def test_invalid_signature_is_rejected_and_staged_payload_removed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(root, signed_payload=b"other payload")
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertEqual(error.exception.status_code, 403)
+            thread.assert_not_called()
+            self.assertEqual(
+                {path.name for path in root.iterdir()},
+                {"configs", "update.zip"},
+            )
+
+    def test_package_with_unexpected_outer_archive_entry_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(
+                root,
+                extra_entries=(("unexpected.txt", b"unexpected"),),
+            )
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertIn("only payload.zip and signature.sig", str(error.exception))
+            thread.assert_not_called()
+
+    def test_oversized_payload_entry_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(root, payload_bytes=b"payload")
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.MAX_UPDATE_PACKAGE_SIZE", 5),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertEqual(error.exception.status_code, 413)
+            thread.assert_not_called()
+
+    def test_unsafe_payload_path_is_rejected_before_update_is_started(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            payload_bytes = self.make_main_payload(
+                "c" * 40,
+                extra_entries=(("../outside.txt", b"unsafe"),),
+            )
+            package_path = self.create_signed_package(root, payload_bytes=payload_bytes)
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertIn("unsafe archive path", str(error.exception))
+            thread.assert_not_called()
+
+    def test_expanded_payload_limit_is_enforced(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            payload_bytes = self.make_main_payload(
+                "c" * 40,
+                extra_entries=(("large.txt", b"012345"),),
+            )
+            package_path = self.create_signed_package(root, payload_bytes=payload_bytes)
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.MAX_UPDATE_EXPANDED_SIZE", 5),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path))
+
+            self.assertEqual(error.exception.status_code, 413)
+            thread.assert_not_called()
+
+    def test_signed_package_for_different_commit_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            package_path = self.create_signed_package(
+                root,
+                payload_bytes=self.make_main_payload("a" * 40),
+            )
+            with (
+                patch("frameworks.views.settings.BASE_DIR", root),
+                patch("frameworks.views.threading.Thread") as thread,
+            ):
+                with self.assertRaises(UpdatePackageError) as error:
+                    _verify_and_start_update(str(package_path), expected_commit="b" * 40)
+
+            self.assertEqual(error.exception.status_code, 403)
+            thread.assert_not_called()
+            self.assertEqual(
+                {path.name for path in root.iterdir()},
+                {"configs", "update.zip"},
+            )
+
+
 class ControlQaLockPermissionTests(SimpleTestCase):
     @staticmethod
     def make_user(role):
@@ -373,3 +749,198 @@ class RolePermissionAlignmentTests(SimpleTestCase):
         self.assertTrue(serializer.is_valid(), serializer.errors)
         with self.assertRaises(serializers.ValidationError):
             serializer.save()
+
+
+class AssessmentAssessorImmutabilityTests(TestCase):
+    def test_reviewer_cannot_reassign_their_assessment_before_approval(self):
+        reviewer = User.objects.create_user(username="assessment-reviewer")
+        reviewer.profile.role = "Reviewer"
+        reviewer.profile.save()
+        other_assessor = User.objects.create_user(username="other-assessor")
+        control = Control.objects.create(control_id="ASSESSOR-IMMUTABLE-1", description="Test control")
+        assessment = AssessmentActivity.objects.create(
+            control=control,
+            assessor=reviewer,
+            status="In QA Review",
+        )
+        factory = APIRequestFactory()
+
+        reassign_request = factory.patch(
+            f"/api/assessments/{assessment.pk}/",
+            {"assessor": other_assessor.pk},
+            format="json",
+        )
+        force_authenticate(reassign_request, user=reviewer)
+        reassign_response = AssessmentActivityDetailView.as_view()(reassign_request, pk=assessment.pk)
+
+        self.assertEqual(reassign_response.status_code, 200)
+        assessment.refresh_from_db()
+        self.assertEqual(assessment.assessor_id, reviewer.pk)
+
+        approve_request = factory.patch(
+            f"/api/assessments/{assessment.pk}/",
+            {"status": "Completed"},
+            format="json",
+        )
+        force_authenticate(approve_request, user=reviewer)
+        approve_response = AssessmentActivityDetailView.as_view()(approve_request, pk=assessment.pk)
+
+        self.assertEqual(approve_response.status_code, 403)
+        assessment.refresh_from_db()
+        self.assertEqual(assessment.status, "In QA Review")
+
+
+class FrameworkRemovalTests(TestCase):
+    def setUp(self):
+        self.admin = User.objects.create_user(username="framework-removal-admin")
+        self.admin.set_password("correct-admin-password")
+        self.admin.save(update_fields=["password"])
+        self.admin.profile.role = "Admin"
+        self.admin.profile.save()
+        self.factory = APIRequestFactory()
+
+    def post_removal(self, data):
+        request = self.factory.post("/api/frameworks/remove/", data, format="json")
+        force_authenticate(request, user=self.admin)
+        return FrameworkRemovalView.as_view()(request)
+
+    def test_removes_framework_with_no_work_and_leaves_other_frameworks(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-EMPTY-1",
+            framework="Empty Framework",
+            description="Unworked control",
+        )
+        other_control = Control.objects.create(
+            control_id="FRAMEWORK-OTHER-1",
+            framework="Other Framework",
+            description="Keep this control",
+        )
+
+        response = self.post_removal({"framework": "Empty Framework"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["deleted_controls"], 1)
+        self.assertFalse(Control.objects.filter(pk=control.pk).exists())
+        self.assertTrue(Control.objects.filter(pk=other_control.pk).exists())
+
+    def test_work_requires_fresh_explicit_confirmation_before_removal(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-WORK-1",
+            framework="Worked Framework",
+            description="Worked control",
+            status="Failing",
+            evidence="Evidence narrative",
+        )
+        assessment = AssessmentActivity.objects.create(
+            control=control,
+            assessor=self.admin,
+            status="Planned",
+        )
+        TestPlan.objects.create(control=control, test_steps="Review access logs.")
+        RemediationTask.objects.create(
+            control=control,
+            title="Close the finding",
+            description="Update access controls.",
+            status="Resolved",
+        )
+        risk = Risk.objects.create(risk_id="FRAMEWORK-RISK-1", title="Access risk")
+        risk.mitigating_controls.add(control)
+
+        check_response = self.post_removal({"framework": "Worked Framework"})
+
+        self.assertEqual(check_response.status_code, 409)
+        self.assertEqual(check_response.data["affected_control_count"], 1)
+        self.assertEqual(
+            check_response.data["work_summary"],
+            {"evaluation": 1, "evidence": 1, "audit": 1, "remediation": 1, "risk": 1},
+        )
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+
+        remove_response = self.post_removal({
+            "framework": "Worked Framework",
+            "confirmation_token": check_response.data["confirmation_token"],
+            "username": self.admin.username,
+            "password": "correct-admin-password",
+        })
+
+        self.assertEqual(remove_response.status_code, 200)
+        self.assertFalse(Control.objects.filter(pk=control.pk).exists())
+        self.assertFalse(AssessmentActivity.objects.filter(pk=assessment.pk).exists())
+        self.assertFalse(TestPlan.objects.filter(control_id=control.pk).exists())
+        self.assertFalse(RemediationTask.objects.filter(control_id=control.pk).exists())
+        risk.refresh_from_db()
+        self.assertFalse(risk.mitigating_controls.exists())
+
+    def test_worked_framework_requires_valid_admin_credentials(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-CREDENTIALS-1",
+            framework="Credential Protected Framework",
+            description="Evaluated control",
+            status="Failing",
+        )
+        check_response = self.post_removal({"framework": "Credential Protected Framework"})
+        confirmation_token = check_response.data["confirmation_token"]
+
+        missing_credentials = self.post_removal({
+            "framework": "Credential Protected Framework",
+            "confirmation_token": confirmation_token,
+        })
+        self.assertEqual(missing_credentials.status_code, 400)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+
+        incorrect_credentials = self.post_removal({
+            "framework": "Credential Protected Framework",
+            "confirmation_token": confirmation_token,
+            "username": self.admin.username,
+            "password": "incorrect-password",
+        })
+        self.assertEqual(incorrect_credentials.status_code, 403)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+
+        mismatched_username = self.post_removal({
+            "framework": "Credential Protected Framework",
+            "confirmation_token": confirmation_token,
+            "username": "another-admin",
+            "password": "correct-admin-password",
+        })
+        self.assertEqual(mismatched_username.status_code, 403)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+
+    def test_confirmation_is_invalidated_when_control_work_changes(self):
+        control = Control.objects.create(
+            control_id="FRAMEWORK-CHANGED-1",
+            framework="Changed Framework",
+            description="Control with evidence",
+            evidence="Original evidence",
+        )
+        check_response = self.post_removal({"framework": "Changed Framework"})
+        control.evidence = "Updated evidence"
+        control.save(update_fields=["evidence"])
+
+        stale_confirmation = self.post_removal({
+            "framework": "Changed Framework",
+            "confirmation_token": check_response.data["confirmation_token"],
+        })
+
+        self.assertEqual(stale_confirmation.status_code, 409)
+        self.assertTrue(Control.objects.filter(pk=control.pk).exists())
+        self.assertIn("confirmation_token", stale_confirmation.data)
+
+    def test_non_admin_cannot_remove_frameworks(self):
+        contributor = User.objects.create_user(username="framework-removal-contributor")
+        Control.objects.create(
+            control_id="FRAMEWORK-PROTECTED-1",
+            framework="Protected Framework",
+            description="Protected control",
+        )
+        request = self.factory.post(
+            "/api/frameworks/remove/",
+            {"framework": "Protected Framework"},
+            format="json",
+        )
+        force_authenticate(request, user=contributor)
+
+        response = FrameworkRemovalView.as_view()(request)
+
+        self.assertEqual(response.status_code, 403)
+        self.assertTrue(Control.objects.filter(framework="Protected Framework").exists())

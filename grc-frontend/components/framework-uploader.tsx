@@ -9,9 +9,10 @@
  */
 
 import type React from "react"
-import { useCallback, useRef, useState } from "react"
-import { CheckCircle2, FileJson, FileWarning, RotateCcw, UploadCloud, X } from "lucide-react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { CheckCircle2, ChevronDown, FileJson, FileWarning, RotateCcw, UploadCloud, X } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select"
 import { fetchApi } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -95,24 +96,80 @@ function normalizeControl(item: any, index: number, frameworkName: string) {
 }
 
 interface FrameworkUploaderProps {
-  onImported?: (controlCount: number, fileName: string) => void
+  onImported?: (controlCount: number, frameworkName: string) => void
+}
+
+interface FrameworkLibraryEntry {
+  id: string
+  name: string
+  description: string
+  item_count: number
+}
+
+function isFrameworkLibraryEntry(value: unknown): value is FrameworkLibraryEntry {
+  if (!value || typeof value !== "object") return false
+  const entry = value as Record<string, unknown>
+  return (
+    typeof entry.id === "string" &&
+    typeof entry.name === "string" &&
+    typeof entry.description === "string" &&
+    typeof entry.item_count === "number"
+  )
 }
 
 export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
+  const [isChooserOpen, setIsChooserOpen] = useState(false)
   const [status, setStatus] = useState<UploadStatus>("idle")
   const [progress, setProgress] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [controlCount, setControlCount] = useState(0)
+  const [importedFrameworkName, setImportedFrameworkName] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
+  const [libraryFrameworks, setLibraryFrameworks] = useState<FrameworkLibraryEntry[]>([])
+  const [selectedLibraryId, setSelectedLibraryId] = useState("")
+  const [isLoadingLibrary, setIsLoadingLibrary] = useState(true)
+  const [isLoadingFramework, setIsLoadingFramework] = useState(false)
+  const [libraryError, setLibraryError] = useState("")
 
   const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (!isChooserOpen) return
+
+    let isMounted = true
+    fetchApi("framework-library/")
+      .then(async (response) => {
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.error || "Could not load bundled frameworks.")
+        if (!Array.isArray(data.frameworks) || !data.frameworks.every(isFrameworkLibraryEntry)) {
+          throw new Error("The framework library response was invalid.")
+        }
+        return data.frameworks
+      })
+      .then((frameworks) => {
+        if (!isMounted) return
+        setLibraryFrameworks(frameworks)
+        setSelectedLibraryId(frameworks[0]?.id ?? "")
+      })
+      .catch((error: unknown) => {
+        if (!isMounted) return
+        setLibraryError(error instanceof Error ? error.message : "Could not load bundled frameworks.")
+      })
+      .finally(() => {
+        if (isMounted) setIsLoadingLibrary(false)
+      })
+    return () => {
+      isMounted = false
+    }
+  }, [isChooserOpen])
 
   const reset = useCallback(() => {
     setStatus("idle")
     setProgress(0)
     setFile(null)
     setControlCount(0)
+    setImportedFrameworkName("")
     setErrorMessage("")
     if (inputRef.current) inputRef.current.value = ""
   }, [])
@@ -135,6 +192,22 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
     setFile(selected)
     setStatus("ready")
   }, [])
+
+  const loadBundledFramework = useCallback(async () => {
+    if (!selectedLibraryId) return
+    setIsLoadingFramework(true)
+    setLibraryError("")
+    try {
+      const response = await fetchApi(`framework-library/${encodeURIComponent(selectedLibraryId)}/`)
+      const data = await response.json()
+      if (!response.ok) throw new Error(data.error || "Could not load the selected framework.")
+      selectFile(new File([JSON.stringify(data)], `${selectedLibraryId}.json`, { type: "application/json" }))
+    } catch (error) {
+      setLibraryError(error instanceof Error ? error.message : "Could not load the selected framework.")
+    } finally {
+      setIsLoadingFramework(false)
+    }
+  }, [selectedLibraryId, selectFile])
 
   const processFramework = useCallback(async () => {
     if (!file) return
@@ -171,8 +244,9 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
 
       setProgress(100);
       setControlCount(total);
+      setImportedFrameworkName(frameworkName);
       setStatus("success");
-      onImported?.(total, file.name);
+      onImported?.(total, frameworkName);
 
     } catch (error: any) {
       console.error(error);
@@ -213,7 +287,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
           <p className="text-sm text-muted-foreground">
             <span className="font-semibold text-success">{controlCount}</span>{" "}
             {controlCount === 1 ? "control" : "controls"} parsed from{" "}
-            <span className="font-medium text-card-foreground">{file?.name}</span>
+            <span className="font-medium text-card-foreground">{importedFrameworkName}</span>
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={reset} className="mt-1">
@@ -226,6 +300,74 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
 
   return (
     <div className="flex flex-col gap-4">
+      <Button
+        type="button"
+        variant="outline"
+        onClick={() => setIsChooserOpen((open) => !open)}
+        aria-expanded={isChooserOpen}
+        aria-controls={isChooserOpen ? "framework-import-options" : undefined}
+        className="w-full justify-between"
+      >
+        <span className="flex items-center gap-2">
+          <UploadCloud className="size-4" aria-hidden="true" />
+          {isChooserOpen ? "Hide framework options" : "Choose or upload a framework"}
+        </span>
+        <ChevronDown
+          className={cn("size-4 text-muted-foreground transition-transform", isChooserOpen && "rotate-180")}
+          aria-hidden="true"
+        />
+      </Button>
+      {isChooserOpen && (
+        <div id="framework-import-options" className="grid gap-4">
+      {(isLoadingLibrary || libraryFrameworks.length > 0 || libraryError) && (
+        <div className="grid gap-3 rounded-lg border border-border bg-muted/30 p-4">
+          <div className="space-y-1">
+            <p className="text-sm font-medium text-card-foreground">Choose a bundled framework</p>
+            <p className="text-xs text-muted-foreground">
+              Select a JSON framework included with this appliance, or upload your own below.
+            </p>
+          </div>
+          {isLoadingLibrary ? (
+            <p className="text-sm text-muted-foreground" role="status">Loading bundled frameworks...</p>
+          ) : libraryFrameworks.length > 0 ? (
+            <div className="flex min-w-0 flex-col gap-2 sm:flex-row">
+              <Select
+                value={selectedLibraryId}
+                onValueChange={(value) => value && setSelectedLibraryId(value)}
+                disabled={isLoadingFramework || isBusy}
+              >
+                <SelectTrigger aria-label="Bundled framework" className="h-10 min-w-0 flex-1 bg-background">
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {libraryFrameworks.find((framework) => framework.id === selectedLibraryId)?.name ?? "Select a framework"}
+                  </span>
+                </SelectTrigger>
+                <SelectContent className="w-[var(--anchor-width)] max-w-[calc(100vw-2rem)]">
+                  {libraryFrameworks.map((framework) => (
+                    <SelectItem key={framework.id} value={framework.id} className="whitespace-normal">
+                      {framework.name} ({framework.item_count} {framework.item_count === 1 ? "item" : "items"})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={loadBundledFramework}
+                disabled={!selectedLibraryId || isLoadingFramework || isBusy}
+                className="shrink-0"
+              >
+                {isLoadingFramework ? "Loading..." : "Use selected framework"}
+              </Button>
+            </div>
+          ) : !libraryError ? (
+            <p className="text-sm text-muted-foreground">No bundled frameworks are available.</p>
+          ) : null}
+          {libraryError && (
+            <p className="text-sm text-destructive" role="alert">{libraryError}</p>
+          )}
+        </div>
+      )}
+
       <div
         onDragOver={(e) => { e.preventDefault(); if (!isBusy) setIsDragging(true) }}
         onDragLeave={() => setIsDragging(false)}
@@ -298,6 +440,8 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
           {isProcessing ? "Processing…" : "Process Framework"}
         </Button>
       </div>
+        </div>
+      )}
     </div>
   )
 }

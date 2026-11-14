@@ -18,6 +18,7 @@ import {
   Upload,
   ArchiveRestore,
   UploadCloud,
+  GitBranch,
   AlertCircle,
   KeyRound,
   Download,
@@ -62,6 +63,13 @@ interface SessionRow {
 
 type RawSession = Omit<SessionRow, "icon">
 
+interface MainUpdateStatus {
+  available: boolean
+  up_to_date: boolean
+  commit: string
+  message: string
+}
+
 const SESSION_TIMEOUTS = ["15 minutes", "30 minutes", "1 hour", "4 hours", "8 hours"]
 
 /**
@@ -97,6 +105,10 @@ export function WorkspaceSettings() {
   const [restoreFile, setRestoreFile] = useState<File | null>(null)
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
+  const [isCheckingMainUpdate, setIsCheckingMainUpdate] = useState(false)
+  const [mainUpdateStatus, setMainUpdateStatus] = useState<MainUpdateStatus | null>(null)
+  const [showMainUpdateConfirm, setShowMainUpdateConfirm] = useState(false)
+  const [backupConfirmed, setBackupConfirmed] = useState(false)
 
   // HTTPS & Trust State
   const [isHttpsEnabled, setIsHttpsEnabled] = useState(
@@ -422,7 +434,7 @@ export function WorkspaceSettings() {
       return
     }
 
-    if (!window.confirm(`Are you sure you want to install ${file.name}? The system will go offline for a few minutes.`)) {
+    if (!window.confirm(`Before installing ${file.name}, download a current System Backup from Organization settings. Updates cannot be rolled back automatically. Have you created a current backup and want to continue? The system will go offline for a few minutes.`)) {
       if (updateInputRef.current) updateInputRef.current.value = ""
       return
     }
@@ -455,6 +467,62 @@ export function WorkspaceSettings() {
       if (updateInputRef.current) updateInputRef.current.value = ""
     }
   } 
+
+  async function handleCheckForMainUpdate() {
+    setIsCheckingMainUpdate(true)
+    setMainUpdateStatus(null)
+    try {
+      const res = await fetchApi("update/main/")
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Could not check GitHub for updates.")
+
+      setMainUpdateStatus(data)
+      if (data.available) {
+        toast.info("Main-branch update available", {
+          description: `Signed update for commit ${data.commit.slice(0, 7)}.`,
+        })
+      } else {
+        toast.info(data.message)
+      }
+    } catch (error) {
+      toast.error("Update check failed", {
+        description: error instanceof Error ? error.message : "Could not check GitHub for updates.",
+      })
+      setMainUpdateStatus(null)
+    } finally {
+      setIsCheckingMainUpdate(false)
+    }
+  }
+
+  async function executeMainUpdate() {
+    if (!mainUpdateStatus?.available || !backupConfirmed) return
+
+    setIsUpdating(true)
+    try {
+      const res = await fetchApi("update/main/", {
+        method: "POST",
+        body: JSON.stringify({
+          confirm_backup: true,
+          expected_commit: mainUpdateStatus.commit,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || "Could not install the main-branch update.")
+
+      setShowMainUpdateConfirm(false)
+      toast.success("Update initialized", {
+        description: "The signed update is applying and the system will restart shortly.",
+      })
+      setTimeout(() => window.location.reload(), 15000)
+    } catch (error) {
+      toast.error("Update failed", {
+        description: error instanceof Error ? error.message : "Could not install the main-branch update.",
+      })
+      setMainUpdateStatus(null)
+    } finally {
+      setIsUpdating(false)
+    }
+  }
 
   function handleEnableHTTPS(checked: boolean) {
     if (!checked) {
@@ -687,11 +755,57 @@ export function WorkspaceSettings() {
                   </Badge>
                 </CardTitle>
                 <CardDescription className="text-xs">
-                  Upload an official Edge-GRC release package to upgrade the appliance to the latest version.
+                  Install the latest signed update from GitHub main or upload an official update package.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
+              <CardContent className="grid gap-4">
+                <div className="flex flex-col gap-4 rounded-lg border border-border bg-muted/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">Update from GitHub main</p>
+                    <p className="text-sm text-muted-foreground text-balance">
+                      Check for a signed package built from the latest main-branch commit. You will be asked to confirm a current backup before installation.
+                    </p>
+                    {mainUpdateStatus && (
+                      <p className="text-xs text-muted-foreground" role="status">
+                        {mainUpdateStatus.message}
+                        {mainUpdateStatus.commit && ` (commit ${mainUpdateStatus.commit.slice(0, 7)})`}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-2 sm:flex-row">
+                    <Button
+                      variant="outline"
+                      onClick={handleCheckForMainUpdate}
+                      disabled={isCheckingMainUpdate || isUpdating}
+                    >
+                      {isCheckingMainUpdate ? (
+                        <><Loader2 className="mr-2 size-4 animate-spin" /> Checking...</>
+                      ) : (
+                        <><GitBranch className="mr-2 size-4" /> Check main</>
+                      )}
+                    </Button>
+                    {mainUpdateStatus?.available && (
+                      <Button
+                        onClick={() => {
+                          setBackupConfirmed(false)
+                          setShowMainUpdateConfirm(true)
+                        }}
+                        disabled={isUpdating || isCheckingMainUpdate}
+                        className="bg-purple-600 text-white hover:bg-purple-700"
+                      >
+                        <Download className="mr-2 size-4" /> Install update
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
+                  <div className="space-y-1">
+                    <p className="text-sm font-medium text-foreground">Manual update</p>
+                    <p className="text-sm text-muted-foreground">
+                      Upload a signed official update package.
+                    </p>
+                  </div>
                   <input
                     type="file"
                     ref={updateInputRef}
@@ -905,6 +1019,61 @@ export function WorkspaceSettings() {
       )}
 
       {/* Confirmation Dialog for System Restore */}
+      <Dialog
+        open={showMainUpdateConfirm}
+        onOpenChange={(open) => {
+          if (!isUpdating) {
+            setShowMainUpdateConfirm(open)
+            if (!open) setBackupConfirmed(false)
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-destructive flex items-center gap-2">
+              <ShieldCheck className="size-5" /> Back Up Before Updating
+            </DialogTitle>
+            <DialogDescription className="mt-2">
+              The appliance will install the signed update for main commit{" "}
+              <span className="font-mono">{mainUpdateStatus?.commit.slice(0, 7)}</span> and restart its services. Download a current system backup first; this update cannot be automatically rolled back.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-4">
+            <Label htmlFor="main-update-backup-confirmation" className="flex cursor-pointer items-start gap-3 text-sm">
+              <input
+                id="main-update-backup-confirmation"
+                type="checkbox"
+                checked={backupConfirmed}
+                onChange={(event) => setBackupConfirmed(event.target.checked)}
+                disabled={isUpdating}
+                className="mt-0.5 size-4 shrink-0 accent-primary"
+              />
+              <span>I have downloaded a current system backup and want to continue.</span>
+            </Label>
+          </div>
+          <DialogFooter className="mt-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowMainUpdateConfirm(false)}
+              disabled={isUpdating}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={executeMainUpdate}
+              disabled={!backupConfirmed || isUpdating}
+            >
+              {isUpdating ? (
+                <><Loader2 className="mr-2 size-4 animate-spin" /> Installing...</>
+              ) : (
+                "Install signed update"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={showRestoreConfirm} onOpenChange={setShowRestoreConfirm}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
