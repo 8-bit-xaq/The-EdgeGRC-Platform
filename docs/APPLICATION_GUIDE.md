@@ -153,6 +153,8 @@ Administrators can also choose a bundled JSON framework from the appliance's
 `Frameworks/` directory. Bundled choices appear in both the Frameworks importer
 and the startup wizard, alongside the option to upload a JSON file. These
 choices stay collapsed until the user selects **Choose or upload a framework**.
+Once a bundled framework is represented in the controls, it is marked as
+already in use and cannot be selected for another bundled import.
 Framework files are included in fresh installations and signed platform update
 packages.
 
