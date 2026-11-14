@@ -43,8 +43,7 @@ function extractControls(data: any): any[] {
           req.sub_requirements.forEach((sub: any) => {
             flattened.push({
               ...sub,
-              requirement_title: req.requirement_title,
-              process_mechanism: req.processes_and_mechanisms
+              requirement_title: req.requirement_title
             });
           });
         }
@@ -88,7 +87,6 @@ function normalizeControl(item: any, index: number, frameworkName: string) {
     control_id: String(rawId),
     framework: frameworkName,
     requirement_title: item.requirement_title || "",
-    process_mechanism: item.process_mechanism || "",
     description: item.description || item.title || item.name || JSON.stringify(item),
     status: "Not Evaluated",
     tags: parsedTags

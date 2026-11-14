@@ -19,8 +19,8 @@ tracks corrective work, and summarizes risk and compliance status.
 The application includes:
 
 - **Framework management:** Import JSON frameworks and manage their controls.
-- **Evidence management:** Record implementation narratives, tags, and proof
-  files for controls.
+- **Evidence management:** Record evidence narratives and attach proof files
+  to controls.
 - **Assessment management:** Define test plans and schedules, record audit
   activities, and route assessments through quality review.
 - **Risk management:** Score risks and link them to mitigating controls.
@@ -146,8 +146,8 @@ arrays such as `controls`, `requirements`, `items`, and `policies`, and can
 flatten requirements containing sub-requirements. Framework names are taken
 from JSON metadata when available, otherwise from the filename. Imported
 items are normalized into controls with an identifier, framework name,
-description, optional requirement grouping/process text/tags, and an initial
-Not Evaluated status.
+description, optional requirement grouping and tags, and an initial Not
+Evaluated status.
 
 Administrators can also choose a bundled JSON framework from the appliance's
 `Frameworks/` directory. Bundled choices appear in both the Frameworks importer
@@ -187,13 +187,13 @@ includes filtering/search tools for:
 - Control status
 - Design effectiveness
 - Implementation/operational effectiveness
-- Text matching the control identifier, description, requirement, process
-  mechanism, or framework
+- Text matching the control identifier, description, requirement title, or
+  framework
 
 Groups can be expanded or collapsed. Selecting a control opens its detail
-dialog. The table also indicates the control's current state and may display
-related cross-walked controls, risks, schedules, assessments, and remediation
-work.
+dialog. The table shows each control's requirement description. The table also
+indicates the control's current state and may display related cross-walked
+controls, risks, schedules, assessments, and remediation work.
 
 ![Framework Management control matrix with framework importer, search, filters, and grouped requirements](./images/controls-matrix.jpg)
 
@@ -210,8 +210,8 @@ cross-walked control IDs and linked risk IDs when present. It has three tabs:
      status override selector.
    - **Control Tags:** Administrators can edit comma-separated tags; tags are
      used in automated cross-walking.
-   - **Implementation Narrative:** Describes how the organization implements
-     the requirement.
+   - **Evidence Narrative:** Records the organization's description of how it
+     implements the control, along with relevant example or operational notes.
    - **Supporting Proof Files:** Upload, view, or remove attached artifacts,
      subject to role and control-state restrictions.
    - **Save / Ready for Audit:** Saves narrative/evidence changes or
@@ -430,9 +430,9 @@ permission checks and the intended day-to-day responsibilities.
 
 1. **Load requirements.** An administrator imports one or more framework
    JSON files. Controls appear grouped and searchable in Framework Management.
-2. **Document implementation.** Contributors and administrators add an
-   implementation narrative and attach supporting proof. Administrators can
-   apply tags used for control cross-walking.
+2. **Document implementation.** Contributors and administrators record the
+   control's evidence narrative and attach supporting proof. Administrators
+   can apply tags used for control cross-walking.
 3. **Prepare testing.** An administrator or auditor defines the test plan,
    selects a test methodology, documents steps and expected artifacts, and
    sets the testing cadence/next date.
