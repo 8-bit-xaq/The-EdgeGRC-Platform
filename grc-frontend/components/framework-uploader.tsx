@@ -102,6 +102,7 @@ interface FrameworkLibraryEntry {
   name: string
   description: string
   item_count: number
+  in_use: boolean
 }
 
 function isFrameworkLibraryEntry(value: unknown): value is FrameworkLibraryEntry {
@@ -111,8 +112,13 @@ function isFrameworkLibraryEntry(value: unknown): value is FrameworkLibraryEntry
     typeof entry.id === "string" &&
     typeof entry.name === "string" &&
     typeof entry.description === "string" &&
-    typeof entry.item_count === "number"
+    typeof entry.item_count === "number" &&
+    typeof entry.in_use === "boolean"
   )
+}
+
+function isFrameworkLibraryList(value: unknown): value is FrameworkLibraryEntry[] {
+  return Array.isArray(value) && value.every(isFrameworkLibraryEntry)
 }
 
 export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
@@ -121,6 +127,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
   const [progress, setProgress] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
+  const [bundledFrameworkId, setBundledFrameworkId] = useState<string | null>(null)
   const [controlCount, setControlCount] = useState(0)
   const [importedFrameworkName, setImportedFrameworkName] = useState("")
   const [errorMessage, setErrorMessage] = useState("")
@@ -136,19 +143,22 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
     if (!isChooserOpen) return
 
     let isMounted = true
+    setIsLoadingLibrary(true)
+    setLibraryError("")
     fetchApi("framework-library/")
       .then(async (response) => {
         const data = await response.json()
         if (!response.ok) throw new Error(data.error || "Could not load bundled frameworks.")
-        if (!Array.isArray(data.frameworks) || !data.frameworks.every(isFrameworkLibraryEntry)) {
+        const frameworks: unknown = data.frameworks
+        if (!isFrameworkLibraryList(frameworks)) {
           throw new Error("The framework library response was invalid.")
         }
-        return data.frameworks
+        return frameworks
       })
       .then((frameworks) => {
         if (!isMounted) return
         setLibraryFrameworks(frameworks)
-        setSelectedLibraryId(frameworks[0]?.id ?? "")
+        setSelectedLibraryId(frameworks.find((framework) => !framework.in_use)?.id ?? "")
       })
       .catch((error: unknown) => {
         if (!isMounted) return
@@ -162,10 +172,17 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
     }
   }, [isChooserOpen])
 
+  useEffect(() => {
+    if (selectedLibraryId && libraryFrameworks.find((framework) => framework.id === selectedLibraryId)?.in_use) {
+      setSelectedLibraryId(libraryFrameworks.find((framework) => !framework.in_use)?.id ?? "")
+    }
+  }, [libraryFrameworks, selectedLibraryId])
+
   const reset = useCallback(() => {
     setStatus("idle")
     setProgress(0)
     setFile(null)
+    setBundledFrameworkId(null)
     setControlCount(0)
     setImportedFrameworkName("")
     setErrorMessage("")
@@ -188,6 +205,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
       return
     }
     setFile(selected)
+    setBundledFrameworkId(null)
     setStatus("ready")
   }, [])
 
@@ -200,6 +218,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
       const data = await response.json()
       if (!response.ok) throw new Error(data.error || "Could not load the selected framework.")
       selectFile(new File([JSON.stringify(data)], `${selectedLibraryId}.json`, { type: "application/json" }))
+      setBundledFrameworkId(selectedLibraryId)
     } catch (error) {
       setLibraryError(error instanceof Error ? error.message : "Could not load the selected framework.")
     } finally {
@@ -232,11 +251,20 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
 
       const response = await fetchApi("controls/bulk-import/", {
         method: "POST",
-        body: JSON.stringify({ framework: frameworkName, controls: normalizedControls }),
+        body: JSON.stringify({
+          framework: frameworkName,
+          controls: normalizedControls,
+          ...(bundledFrameworkId ? { bundled_framework_id: bundledFrameworkId } : {}),
+        }),
       });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => null);
+        if (response.status === 409 && bundledFrameworkId) {
+          setLibraryFrameworks((current) => current.map((framework) =>
+            framework.id === bundledFrameworkId ? { ...framework, in_use: true } : framework
+          ))
+        }
         throw new Error(errData?.error || "Failed to import framework controls.");
       }
 
@@ -244,6 +272,13 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
       setControlCount(total);
       setImportedFrameworkName(frameworkName);
       setStatus("success");
+      if (bundledFrameworkId) {
+        setLibraryFrameworks((current) => {
+          return current.map((framework) =>
+            framework.id === bundledFrameworkId ? { ...framework, in_use: true } : framework
+          )
+        })
+      }
       onImported?.(total, frameworkName);
 
     } catch (error: any) {
@@ -251,7 +286,7 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
       setStatus("error");
       setErrorMessage(error?.message || "The file could not be processed or uploaded.");
     }
-  }, [file, onImported])
+  }, [bundledFrameworkId, file, onImported])
 
   const handleDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -332,17 +367,21 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
               <Select
                 value={selectedLibraryId}
                 onValueChange={(value) => value && setSelectedLibraryId(value)}
-                disabled={isLoadingFramework || isBusy}
+                disabled={isLoadingFramework || isBusy || !libraryFrameworks.some((framework) => !framework.in_use)}
               >
                 <SelectTrigger aria-label="Bundled framework" className="h-10 min-w-0 flex-1 bg-background">
                   <span className="min-w-0 flex-1 truncate text-left">
-                    {libraryFrameworks.find((framework) => framework.id === selectedLibraryId)?.name ?? "Select a framework"}
+                    {libraryFrameworks.find((framework) => framework.id === selectedLibraryId)?.name
+                      ?? (libraryFrameworks.some((framework) => !framework.in_use)
+                        ? "Select a framework"
+                        : "All bundled frameworks are already in use")}
                   </span>
                 </SelectTrigger>
                 <SelectContent className="w-[var(--anchor-width)] max-w-[calc(100vw-2rem)]">
                   {libraryFrameworks.map((framework) => (
-                    <SelectItem key={framework.id} value={framework.id} className="whitespace-normal">
+                    <SelectItem key={framework.id} value={framework.id} disabled={framework.in_use} className="whitespace-normal">
                       {framework.name} ({framework.item_count} {framework.item_count === 1 ? "item" : "items"})
+                      {framework.in_use ? " — already in use" : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -351,7 +390,12 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
                 type="button"
                 variant="outline"
                 onClick={loadBundledFramework}
-                disabled={!selectedLibraryId || isLoadingFramework || isBusy}
+                disabled={
+                  !selectedLibraryId ||
+                  libraryFrameworks.find((framework) => framework.id === selectedLibraryId)?.in_use ||
+                  isLoadingFramework ||
+                  isBusy
+                }
                 className="shrink-0"
               >
                 {isLoadingFramework ? "Loading..." : "Use selected framework"}
@@ -360,6 +404,9 @@ export function FrameworkUploader({ onImported }: FrameworkUploaderProps) {
           ) : !libraryError ? (
             <p className="text-sm text-muted-foreground">No bundled frameworks are available.</p>
           ) : null}
+          {!isLoadingLibrary && libraryFrameworks.length > 0 && libraryFrameworks.every((framework) => framework.in_use) && (
+            <p className="text-xs text-muted-foreground">All bundled frameworks are already in use. Upload a different framework file to add other controls.</p>
+          )}
           {libraryError && (
             <p className="text-sm text-destructive" role="alert">{libraryError}</p>
           )}

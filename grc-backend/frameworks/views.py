@@ -133,6 +133,18 @@ def _load_framework_library_file(framework_id):
     return definition
 
 
+def _framework_library_name(definition, framework_id):
+    if isinstance(definition, dict):
+        return str(
+            definition.get("framework")
+            or definition.get("framework_name")
+            or definition.get("title")
+            or definition.get("name")
+            or framework_id.replace("-", " ").replace("_", " ")
+        ).strip()
+    return framework_id.replace("-", " ").replace("_", " ")
+
+
 def _github_json(url):
     request = Request(
         url,
@@ -2157,15 +2169,50 @@ class BulkControlImportView(APIView):
         updated_count = 0
 
         batch_framework = str(request.data.get('framework', '')).strip() or "General"
+        bundled_framework_id = request.data.get('bundled_framework_id')
+        bundled_framework_name = None
+        if bundled_framework_id is not None:
+            if not isinstance(bundled_framework_id, str):
+                return Response(
+                    {"error": "A valid bundled framework identifier is required."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                definition = _load_framework_library_file(bundled_framework_id)
+            except FileNotFoundError:
+                return Response(
+                    {"error": "Bundled framework not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                return Response(
+                    {"error": f"Could not read bundled framework: {exc}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
+            bundled_framework_name = _framework_library_name(definition, bundled_framework_id)
+            batch_framework = bundled_framework_name
 
         try:
             with transaction.atomic():
+                if (
+                    bundled_framework_name
+                    and Control.objects.filter(framework__iexact=bundled_framework_name).exists()
+                ):
+                    return Response(
+                        {"error": f"{bundled_framework_name} is already in use."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
                 for c in controls_data:
                     cid = str(c.get('control_id', '')).strip()
                     if not cid:
                         continue
 
-                    framework_val = str(c.get('framework', '')).strip() or batch_framework
+                    framework_val = (
+                        batch_framework
+                        if bundled_framework_name
+                        else str(c.get('framework', '')).strip() or batch_framework
+                    )
 
                     defaults = {
                         'framework': framework_val,
@@ -2230,13 +2277,7 @@ class FrameworkLibraryView(APIView):
                     )
 
                 if isinstance(definition, dict):
-                    name = (
-                        definition.get("framework")
-                        or definition.get("framework_name")
-                        or definition.get("title")
-                        or definition.get("name")
-                        or framework_id.replace("-", " ").replace("_", " ")
-                    )
+                    name = _framework_library_name(definition, framework_id)
                     description = definition.get("description", "")
                     items = next(
                         (
@@ -2256,6 +2297,7 @@ class FrameworkLibraryView(APIView):
                     "name": str(name),
                     "description": str(description),
                     "item_count": len(items),
+                    "in_use": Control.objects.filter(framework__iexact=str(name).strip()).exists(),
                 })
         except OSError as exc:
             return Response(

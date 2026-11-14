@@ -28,6 +28,7 @@ from .log_sanitizer import sanitize_log_line
 from .serializers import RemediationTaskSerializer
 from .views import (
     AssessmentActivityDetailView,
+    BulkControlImportView,
     DeviceLogView,
     FrameworkLibraryFileView,
     FrameworkLibraryView,
@@ -416,8 +417,67 @@ class FrameworkLibraryViewTests(TestCase):
                 "name": "PCI DSS v4",
                 "description": "Payment card security",
                 "item_count": 2,
+                "in_use": False,
             }],
         )
+
+    def test_admin_library_marks_frameworks_already_in_use(self):
+        Control.objects.create(
+            control_id="pci-existing",
+            framework="PCI DSS v4",
+            description="Existing PCI control",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_root = Path(temp_dir) / "appliance"
+            library = app_root / "Frameworks"
+            library.mkdir(parents=True)
+            (library / "pci-dss.json").write_text(
+                json.dumps({"framework": "PCI DSS v4", "controls": [{"id": "1.1"}]}),
+                encoding="utf-8",
+            )
+            with patch("frameworks.views.settings.BASE_DIR", app_root / "grc-backend"):
+                response = self.make_request(
+                    FrameworkLibraryView,
+                    self.admin,
+                    "/api/framework-library/",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data["frameworks"][0]["in_use"])
+
+    def test_bundled_framework_import_is_rejected_if_already_in_use(self):
+        Control.objects.create(
+            control_id="pci-existing",
+            framework="PCI DSS v4",
+            description="Existing PCI control",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app_root = Path(temp_dir) / "appliance"
+            library = app_root / "Frameworks"
+            library.mkdir(parents=True)
+            (library / "pci-dss.json").write_text(
+                json.dumps({"framework": "PCI DSS v4", "controls": [{"id": "1.1"}]}),
+                encoding="utf-8",
+            )
+            request = self.factory.post(
+                "/api/controls/bulk-import/",
+                {
+                    "framework": "PCI DSS v4",
+                    "bundled_framework_id": "pci-dss",
+                    "controls": [{
+                        "control_id": "1.1",
+                        "framework": "PCI DSS v4",
+                        "description": "Another PCI control",
+                    }],
+                },
+                format="json",
+            )
+            force_authenticate(request, user=self.admin)
+            with patch("frameworks.views.settings.BASE_DIR", app_root / "grc-backend"):
+                response = BulkControlImportView.as_view()(request)
+
+        self.assertEqual(response.status_code, 409)
+        self.assertFalse(Control.objects.filter(control_id="1.1").exists())
 
     def test_admin_can_load_framework_file_for_import(self):
         definition = {"framework": "PCI DSS", "controls": [{"id": "1.1"}]}
