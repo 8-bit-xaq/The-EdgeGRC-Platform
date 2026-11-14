@@ -50,7 +50,7 @@ jobs:
           export UPDATE_COMMIT=$(git rev-parse HEAD)
           printf '%s\n' "$UPDATE_SIGNING_PRIVATE_KEY" > grc-backend/configs/vendor_private.pem
           chmod 600 grc-backend/configs/vendor_private.pem
-          printf '5\n' | ./build-update.sh
+          printf '5\n' | bash ./build-update.sh
 
       - name: Publish signed update for this main commit
         env:
